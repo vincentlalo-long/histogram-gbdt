@@ -1,0 +1,1870 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage[bookmarks=true,pdfencoding=auto]{hyperref}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!75!black,
+    urlcolor=blue!75!black,
+    citecolor=blue!75!black,
+    pdftitle={Histogram Gradient Boosted Decision Trees from First Principles},
+    pdfauthor={Nguyen Dang Long},
+    pdfsubject={Mathematical Foundations, 2nd-Order Optimization, and Systems Architecture for hist-gbdt},
+    pdfkeywords={GBDT, XGBoost, histogram binning, OpenMP, decision trees, machine learning}
+}
+
+% Optimized page geometry for academic monographs
+\setlength{\textwidth}{6.75in}
+\setlength{\textheight}{9.5in}
+\setlength{\oddsidemargin}{-0.125in}
+\setlength{\evensidemargin}{-0.125in}
+\setlength{\topmargin}{-0.65in}
+\setlength{\headheight}{12pt}
+\setlength{\headsep}{12pt}
+\setlength{\footskip}{22pt}
+
+% Compact paragraph and typography rhythm
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{3pt plus 1pt minus 0.5pt}
+
+% Compact display equation skips
+\setlength{\abovedisplayskip}{4.5pt plus 2pt minus 1.5pt}
+\setlength{\belowdisplayskip}{4.5pt plus 2pt minus 1.5pt}
+\setlength{\abovedisplayshortskip}{2.5pt plus 1pt minus 1pt}
+\setlength{\belowdisplayshortskip}{2.5pt plus 1pt minus 1pt}
+
+% Compact list environments (removes large vertical whitespace between items)
+\makeatletter
+\def\tightlist{%
+  \setlength{\itemsep}{1.5pt}%
+  \setlength{\parsep}{0pt}%
+  \setlength{\topsep}{2pt}%
+  \setlength{\partopsep}{0pt}%
+}
+\let\olditemize\itemize
+\def\itemize{\olditemize\tightlist}
+\let\oldenumerate\enumerate
+\def\enumerate{\oldenumerate\tightlist}
+
+% Compact section and heading spacing
+\renewcommand\section{\@startsection {section}{1}{\z@}%
+                                   {-2.0ex \@plus -0.5ex \@minus -.2ex}%
+                                   {0.8ex \@plus.2ex}%
+                                   {\normalfont\large\bfseries}}
+\renewcommand\subsection{\@startsection{subsection}{2}{\z@}%
+                                     {-1.4ex\@plus -0.4ex \@minus -.2ex}%
+                                     {0.5ex \@plus .2ex}%
+                                     {\normalfont\normalsize\bfseries}}
+\renewcommand\subsubsection{\@startsection{subsubsection}{3}{\z@}%
+                                        {-1.1ex\@plus -0.3ex \@minus -.2ex}%
+                                        {0.3ex \@plus .2ex}%
+                                        {\normalfont\normalsize\bfseries}}
+\renewcommand\paragraph{\@startsection{paragraph}{4}{\z@}%
+                                     {0.9ex \@plus0.3ex \@minus.2ex}%
+                                     {-0.6em}%
+                                     {\normalfont\normalsize\bfseries}}
+\makeatother
+
+% Styled Callout Box for Key Insights
+\definecolor{boxbg}{HTML}{F8FAFC}
+\definecolor{boxborder}{HTML}{2B6CB0}
+
+\newcommand{\calloutbox}[1]{%
+    \par\vspace{2pt}%
+    \noindent\fcolorbox{boxborder}{boxbg}{%
+        \begin{minipage}{\dimexpr\textwidth-2\fboxsep-2\fboxrule\relax}
+            \vspace{1.5pt}#1\vspace{1.5pt}
+        \end{minipage}%
+    }%
+    \par\vspace{2pt}%
+}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\Corr}{\operatorname{Corr}}
+\newcommand{\sign}{\operatorname{sign}}
+\newcommand{\Gain}{\operatorname{Gain}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+\title{\textbf{Histogram Gradient Boosted Decision Trees from First Principles} \\
+\large Mathematical Foundations, 2nd-Order Optimization, and Systems Architecture for \texttt{hist-gbdt}}
+\author{\textbf{Nguyen Dang Long} \\ \texttt{vincentlalo-long}}
+\date{}
+
+\renewcommand{\labelitemi}{$\bullet$}
+\renewcommand{\labelitemii}{--}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This monograph presents an end-to-end, first-principles mathematical and architectural exploration of Gradient Boosted Decision Trees (GBDT). We deconstruct the full evolutionary progression of machine learning algorithms on tabular data, addressing the fundamental question: \emph{why does each successive paradigm emerge, where does it fail, and what mathematical insight resolves the failure?}
+
+We begin by examining the unique statistical topology of tabular data, contrasting the limits of linear regularization, kernel methods, and deep neural networks against step-wise decision boundaries. We derive the geometry of recursive binary partitioning in single Decision Trees (CART) and identify their fatal vulnerability: extreme variance and structural instability. Moving to ensemble theory, we formally prove Leo Breiman's variance-reduction theorem for Bagging ($\Var(\bar{f}) = \rho \sigma^2 + \frac{1-\rho}{B}\sigma^2$) and examine how Random Forests break the inter-tree correlation $\rho \to 0$ via feature subsampling. 
+
+We then demonstrate why Bagging fundamentally fails to reduce irreducible bias, prompting the shift to Boosting: sequential error correction via functional gradient descent. Tracing the trajectory from AdaBoost's vulnerable exponential loss to Jerome Friedman's 1st-order GBDT, we pinpoint the limitations of gradient-only descent on tree structures. This sets the stage for the 2nd-order Taylor optimization framework introduced by XGBoost (Chen \& Guestrin, 2016). We provide rigorous derivations of optimal leaf weights ($w_j^* = -\frac{G_j}{H_j + \lambda}$) and closed-form split gain criteria under analytical $L_2$ leaf regularization and complexity pruning. 
+
+Finally, we transition from mathematics to high-performance computer systems. We analyze the computational crisis of exact greedy split-finding ($\mathcal{O}(K \cdot N \log N)$, memory explosion, and CPU cache misses), and formulate the solution: histogram-based continuous feature binning ($\le 256$ bins, \texttt{uint8} memory layout, up to 87.5\% reduction in raw feature-matrix storage). We derive the \emph{Histogram Subtraction Trick}, which eliminates at least half of the sample traversals at every level below the root, and present a lock-free multi-threaded OpenMP parallel architecture designed for modern multi-core processors.
+\end{abstract}
+
+\vspace{0.8em}
+\noindent\textbf{Notation.} Dataset $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^N$ with $x_i \in \R^K$ and target $y_i \in \R$ (or $\{0, 1\}$). Sample count $N$, feature count $K$. Tree ensemble prediction $\hat{y}_i^{(t)} = \sum_{m=1}^t \eta f_m(x_i)$ with learning rate $\eta \in (0, 1]$. First-order gradient $g_i = \partial l(y_i, \hat{y}) / \partial \hat{y}$, second-order Hessian $h_i = \partial^2 l(y_i, \hat{y}) / \partial \hat{y}^2$. Leaf index mapping $q: \R^K \to \{1, \dots, T\}$. Leaf sample set $I_j = \{i \mid q(x_i) = j\}$. Cumulative gradients $G_j = \sum_{i \in I_j} g_i$, $H_j = \sum_{i \in I_j} h_i$. Quantization bin index $b \in \{0, \dots, B-1\}$ with $B \le 256$.
+
+\newpage
+\tableofcontents
+\newpage
+
+% ==============================================================================
+\section{The Tabular Dilemma: Why Classical Models Fail}
+% ==============================================================================
+
+\subsection{Physical and Statistical Topology: Tabular vs. Vision and Language}
+To understand why specialized tree architectures dominate tabular machine learning, one must first analyze the fundamental topological differences between data modalities:
+
+\paragraph{Computer Vision (Spatial Locality and Smoothness):} 
+An image is a dense, regular spatial grid $X \in \R^{H \times W \times C}$. Vision data is governed by two physical invariants:
+\begin{enumerate}
+    \item \textbf{Spatial Locality and Autocorrelation:} Adjacent pixels share strong physical correlation. A natural image satisfies a localized Lipschitz continuity: shifting a single pixel from intensity $120$ to $121$ causes an imperceptible perturbation that leaves the global semantic identity of the object (e.g., a cat) 100\% intact.
+    \item \textbf{Translation Invariance:} A visual pattern (such as an eye or an edge) retains its exact semantic meaning whether it appears in the upper-left or bottom-right quadrant of the canvas.
+    \item \textbf{Destruction Under Column Permutation:} If one randomly permutes the pixels or columns of an image matrix, all spatial neighborhood relationships are annihilated, rendering human or convolutional recognition impossible.
+\end{enumerate}
+
+\paragraph{Natural Language Processing (Sequential Manifolds):}
+Text data consists of sequential tokens $\{w_1, \dots, w_L\}$ governed by grammar. While raw tokens are discrete, modern language models project them into high-dimensional continuous semantic vector spaces $\R^d$. Within this latent manifold, semantic similarity corresponds to geometric distance (for instance, cosine similarity between $\vec{v}_{\text{physician}}$ and $\vec{v}_{\text{doctor}}$ approaches $1.0$), allowing gradient descent to generalize smoothly across synonyms and grammatical transitions.
+
+\paragraph{Tabular Data (Heterogeneous, Column-Permutation Invariant):}
+A tabular dataset $X \in \R^{N \times K}$ exhibits completely different mathematical properties:
+\begin{enumerate}
+    \item \textbf{Column Permutation Invariance:} If one re-orders column 1 (\texttt{Age}) and column 2 (\texttt{Income}), \emph{zero physical information is lost}. There is no spatial grid, no physical distance, and no neighborhood adjacency between column $j$ and column $j+1$.
+    \item \textbf{Extreme Feature Heterogeneity:} Feature $x_1$ may be an integer bounded in $[0, 100]$ (Age), feature $x_2$ a continuous log-normal financial variable in $[0, 10^8]$ (Net Worth), feature $x_3$ a categorical code with no natural ordering (ZIP code), and feature $x_4$ a sparse binary flag. There is no unified semantic coordinate space that connects them.
+\end{enumerate}
+
+\subsection{The Step-Wise Discontinuous Nature of Tabular Rules}
+\label{sec:tabular_step}
+In biological, financial, and industrial domains, the underlying data-generating distribution is rarely a smooth continuous manifold. Instead, it is governed by \textbf{hard programmatic thresholds, statutory legal rules, and clinical diagnostic cutoffs}.
+
+\paragraph{The Cliff-Edge Boundary Phenomenon:}
+Consider an automated credit card approval or loan underwriting model where one feature is the applicant's age $x \in \R_+$:
+\begin{itemize}
+    \item At $\text{Age} = 17.9$ years, the applicant is legally a minor. Under regulatory compliance laws, the bank must deterministically reject the application: $y = 0$.
+    \item At $\text{Age} = 18.0$ years, the applicant legally enters adulthood and becomes fully eligible: $y = 1$.
+\end{itemize}
+A microscopic perturbation of $\Delta x = 0.1$ years across the threshold $x^* = 18.0$ causes an instantaneous jump of 100\% in the target value ($0 \to 1$). 
+
+\paragraph{The Plateau (Interval Insensitivity) Phenomenon:}
+Conversely, consider an applicant at $\text{Age} = 30$ versus an applicant at $\text{Age} = 40$. The age gap is $\Delta x = 10.0$ years---a distance 100 times larger than the gap between 17.9 and 18.0. Yet, in terms of actuarial employment stability and creditworthiness, their risk profiles fall within the exact same demographic bracket. The true response function is essentially a flat horizontal plateau across the entire interval $[25, 55]$.
+
+\paragraph{Why Smooth Continuous Models Suffer from Severe Inductive Mismatch:}
+When classical smooth models attempt to fit such step functions, they face an insoluble dilemma:
+\begin{itemize}
+    \item \textbf{Linear / Logistic Models:} A linear term $w \cdot x$ can only produce a monotonic slope across the entire real line. If the optimizer increases $w$ to accommodate the sharp transition at $x = 18$, it is forced to extrapolate that same steep slope to ages 30, 40, and 50, severely overestimating probability in older brackets.
+    \item \textbf{Neural Networks with Smooth Activations:} A neural network parameterized with smooth activations (e.g., Sigmoid, Tanh, or GELU) must approximate a vertical step function $\mathbb{I}(x \ge 18)$ by driving its incoming weight to infinity ($w \to +\infty$). This creates extreme numerical instability, exploding gradients during backpropagation, and catastrophic ringing artifacts (akin to the Gibbs phenomenon) that degrade generalization in neighboring intervals.
+\end{itemize}
+
+\subsection{High-Order Conditional Feature Interactions}
+Real-world tabular outcomes are dominated by localized logical conjunctions:
+\begin{equation*}
+    \text{Target } y \approx 1 \iff (\texttt{Country} == \text{"VN"}) \land (\texttt{Income} \ge 20\text{M}) \land (\texttt{Debt\_Ratio} \le 0.35)
+\end{equation*}
+Features act not as additive linear contributors, but as \textbf{conditional gating switches}. The predictive signal of \texttt{Debt\_Ratio} is completely meaningless unless the applicant first satisfies the prerequisite income and regional residency criteria. Learning these localized, multi-variable boolean intersections from scratch without prior feature construction is exceptionally difficult for linear models and MLPs, but represents the native operating mechanism of recursive tree splits.
+
+\subsection{The Vulnerabilities of Linear Models}
+Linear models (OLS, Ridge, Lasso, ElasticNet) enforce a global hyperplane assumption:
+\begin{equation}
+    f(x) = w^\top x + b
+\end{equation}
+To capture nonlinearities and feature interactions, one must manually generate polynomial expansion terms ($x_j x_k, x_j^2$). For $K$ features, this triggers a combinatorial explosion ($\mathcal{O}(K^2), \mathcal{O}(K^3)$), leading to rank deficiency, collinearity, and catastrophic overfitting.
+
+\subsection{The Bottleneck of Kernel Support Vector Machines (SVM)}
+Kernel methods project data into infinite-dimensional reproducing kernel Hilbert spaces (RKHS) via the Gram matrix $K_{ij} = k(x_i, x_j)$. However, evaluating and storing the Gram matrix requires $\mathcal{O}(N^2)$ spatial memory and $\mathcal{O}(N^3)$ computational time, making kernel SVM entirely intractable for tabular datasets exceeding $10^5$ samples.
+
+\subsection{The Inductive Bias Mismatch of Deep Neural Networks}
+Deep neural networks (MLPs, ResNets) are biased toward smooth functions via continuous activation functions (ReLU, GELU, Sigmoid):
+\begin{enumerate}
+    \item \textbf{Smoothness Bias:} Neural networks struggle to approximate axis-aligned discontinuous step functions without requiring massive overparameterization.
+    \item \textbf{Lack of Monotonic Scale Invariance:} Neural networks are sensitive to affine data transformations, requiring meticulous normalization (BatchNorm, LayerNorm), whereas tabular data inherently favors scale-invariant rank comparisons.
+    \item \textbf{Noise Susceptibility:} Dense linear layers suffer when learning across uninformative or un-correlated tabular columns.
+\end{enumerate}
+
+% ==============================================================================
+\section{Decision Trees: Recursive Partitioning and Instability}
+% ==============================================================================
+
+\subsection{Geometric Formulation: Axis-Aligned Hyper-Rectangles}
+\label{sec:tree_geometry}
+A decision tree models complex nonlinear relationships by recursively slicing the $K$-dimensional feature space $\R^K$ into distinct geometric compartments.
+
+\paragraph{Definition of Leaf Count $T$ and Partition Regions $R_j$:}
+Let $T \in \mathbb{N}$ denote the \textbf{total number of terminal leaf nodes} of the tree. A decision tree partitions the continuous input space $\R^K$ into exactly $T$ disjoint regions $\{R_1, R_2, \dots, R_T\}$, where each region $R_j$ corresponds directly to terminal leaf node $j$.
+
+\paragraph{Set-Theoretic Construction of $R_j$:}
+A decision tree is a directed acyclic binary tree. Every internal node $m$ performs a univariate binary test comparing feature $k_m \in \{1, \dots, K\}$ against a scalar threshold $s_m \in \R$. A path from the root node to leaf $j$ forms a sequence of conjunctions (logical $\text{AND}$ conditions). 
+
+Mathematically, the region $R_j \subset \R^K$ is defined as the set of all input vectors $x$ that satisfy the conjunction of decision rules along the ancestral path leading to leaf $j$:
+\begin{equation}
+    R_j = \left\{ x \in \R^K \;\middle|\; \bigwedge_{m \in \operatorname{Ancestors}(j)} \operatorname{BranchCondition}_m(x) \right\}
+\end{equation}
+Because each branching decision splits space along a single coordinate axis ($x_{k_m} \le s_m$ or $x_{k_m} > s_m$), each rule defines an axis-orthogonal half-space. The intersection of these half-spaces constrains each coordinate $x_k$ between a lower bound $a_{jk}$ and an upper bound $b_{jk}$:
+\begin{equation}
+    R_j = \left\{ x \in \R^K \;\middle|\; a_{jk} < x_k \le b_{jk}, \quad \forall k \in \{1, \dots, K\} \right\}
+\end{equation}
+where $-\infty \le a_{jk} < b_{jk} \le +\infty$. Geometrically, each $R_j$ is an \textbf{axis-aligned hyper-rectangle} (or generalized hyper-box) in $\R^K$.
+
+\paragraph{Fundamental Partition Properties:}
+The family of regions $\{R_j\}_{j=1}^T$ forms a strict mathematical partition of the feature domain $\R^K$:
+\begin{enumerate}
+    \item \textbf{Exhaustive Coverage:} $\bigcup_{j=1}^T R_j = \R^K$. Every query point $x \in \R^K$ belongs to at least one leaf region.
+    \item \textbf{Mutual Exclusivity:} $R_j \cap R_{j'} = \emptyset$ for all $j \neq j'$. No query point can belong to more than one leaf simultaneously.
+\end{enumerate}
+
+\paragraph{Leaf Instance Index Set $I_j$:}
+For a given training dataset $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^N$, we define the index set $I_j \subseteq \{1, \dots, N\}$ as the set of all training sample indices that fall into leaf $j$:
+\begin{equation}
+    I_j = \left\{ i \in \{1, \dots, N\} \;\middle|\; x_i \in R_j \right\}
+\end{equation}
+Consequently, the subsets $I_1, \dots, I_T$ partition the index set $\{1, \dots, N\}$ with $\sum_{j=1}^T |I_j| = N$.
+
+\subsection{The Anatomy and Computation of Leaf Weights \texorpdfstring{$w_j$}{wj}}
+
+\paragraph{Why the Predictor is Strictly Piecewise-Constant:}
+The indicator function $\mathbb{I}(x \in R_j)$ evaluates to $1$ if query vector $x$ falls inside region $R_j$, and $0$ otherwise. Because the regions $\{R_1, \dots, R_T\}$ are mutually disjoint ($R_j \cap R_{j'} = \emptyset$), for any given input $x$, \textbf{exactly one} indicator term in the summation is non-zero:
+\begin{equation}
+    f(x) = \sum_{j=1}^T w_j \cdot \mathbb{I}(x \in R_j) = w_{j^*} \quad \text{where } j^* \in \{1, \dots, T\} \text{ is the unique leaf containing } x.
+\end{equation}
+Consequently, $f(x)$ is a \textbf{piecewise-constant step function}: the model's output for any query point $x$ is simply the static weight $w_{j^*}$ associated with the destination leaf $j^*$. In words, $w_j$ is the scalar (or vector) prediction assigned uniformly to every single data point falling inside compartment $R_j$.
+
+\paragraph{How Leaf Weights $w_j$ Are Derived in Classical Decision Trees:}
+Given a fixed spatial partition $\{R_j\}_{j=1}^T$, how does the algorithm determine the optimal value of $w_j$ from training data?
+
+\paragraph{Case 1: Regression (Least Squares Optimization):}
+In regression, we seek a constant scalar $c \in \R$ for leaf $j$ that minimizes the local Sum of Squared Errors (SSE) across all training instances $i \in I_j$:
+\begin{equation}
+    w_j = \arg\min_{c \in \R} \sum_{i \in I_j} (y_i - c)^2
+\end{equation}
+Differentiating the objective with respect to $c$ and setting the derivative to zero:
+\begin{equation}
+    \frac{d}{dc} \sum_{i \in I_j} (y_i - c)^2 = -2 \sum_{i \in I_j} (y_i - c) = 0 \implies \sum_{i \in I_j} y_i - |I_j| \cdot c = 0
+\end{equation}
+Solving for $c$ yields the closed-form analytical solution:
+\begin{equation}
+    w_j = \frac{1}{|I_j|} \sum_{i \in I_j} y_i = \bar{y}_{I_j}
+\end{equation}
+\textbf{Analytical Conclusion:} For squared error regression, the optimal leaf weight $w_j$ is simply the \textbf{empirical sample mean} of target values among all training instances belonging to leaf $j$.
+
+\emph{Numerical Example (Clinical Medicine):} Suppose terminal leaf $R_3$ isolates a high-risk demographic group containing 4 patient records with disease progression scores $y = \{2, 3, 4, 3\}$. The leaf weight is:
+\begin{equation*}
+    w_3 = \frac{2 + 3 + 4 + 3}{4} = \frac{12}{4} = 3.0
+\end{equation*}
+Any new, unseen patient whose biomarker profile routes them along the decision path into region $R_3$ is deterministically predicted to have a score of $f(x) = 3.0$.
+
+\paragraph{Case 2: Classification (Majority Vote vs. Probability Vectors):}
+In $C$-class classification ($y_i \in \{1, \dots, C\}$), the leaf output depends on whether the system outputs hard decisions or soft probabilities:
+\begin{enumerate}
+    \item \textbf{Hard Classification (Plurality / Majority Voting):} The weight $w_j$ is a discrete class label chosen by majority vote:
+    \begin{equation}
+        w_j = \arg\max_{c \in \{1, \dots, C\}} \sum_{i \in I_j} \mathbb{I}(y_i = c)
+    \end{equation}
+    \item \textbf{Probabilistic Classification (Class Distribution Vector):} Rather than a scalar, the leaf weight is a $C$-dimensional empirical probability simplex vector $\mathbf{p}_j = [p_{j,1}, \dots, p_{j,C}]^\top$, where each component represents the empirical relative frequency of class $c$:
+    \begin{equation}
+        p_{j,c} = \frac{|\{ i \in I_j \mid y_i = c \}|}{|I_j|} = \frac{1}{|I_j|} \sum_{i \in I_j} \mathbb{I}(y_i = c)
+    \end{equation}
+    satisfying $\sum_{c=1}^C p_{j,c} = 1$ and $p_{j,c} \ge 0$.
+\end{enumerate}
+
+\emph{Numerical Example (Financial Fraud Detection):} Suppose terminal leaf $R_2$ isolates online transactions occurring at midnight with foreign IP addresses. The leaf captures $|I_2| = 10$ historical transactions, among which 8 are confirmed fraudulent ($y = 1$) and 2 are legitimate ($y = 0$). 
+\begin{itemize}
+    \item For hard classification, majority rule sets $w_2 = 1$ (Class: Fraud).
+    \item For probabilistic scoring, the leaf vector is $\mathbf{p}_2 = [0.2, 0.8]^\top$. Any incoming transaction falling into $R_2$ is assigned an $80\%$ estimated risk probability: $P(y = 1 \mid x \in R_2) = 0.8$.
+\end{itemize}
+
+\paragraph{Forward Connection to GBDT:} 
+In classical decision trees (CART), $w_j$ is computed as a naive empirical average or frequency of the raw target $y$. As will be proven in Section~\ref{sec:xgboost}, Gradient Boosted Trees revolutionize this step: $w_j$ ceases to be a heuristic sample mean, transforming into an exact, regularized 2nd-order Newton-Raphson update on the loss function's gradients and Hessians:
+\begin{equation*}
+    w_j^* = -\frac{\sum_{i \in I_j} g_i}{\sum_{i \in I_j} h_i + \lambda}
+\end{equation*}
+
+\subsection{Greedy Recursive Binary Splitting (CART)}
+\label{sec:greedy_splitting}
+Finding the globally optimal tree partition is NP-hard. Consequently, the CART family of algorithms (Breiman et al., 1984) employs a \textbf{greedy recursive splitting heuristic}: at each node containing sample subset $S \subseteq \{1, \dots, N\}$, the algorithm searches across all $K$ features and all candidate split thresholds $s \in \R$ to maximize immediate impurity reduction:
+\begin{equation}
+    (k^*, s^*) = \arg\max_{k \in \{1, \dots, K\}, s \in \R} \Delta \mathcal{I}(k, s)
+\end{equation}
+where the split candidate divides $S$ into disjoint children $S_L(k, s) = \{ i \in S \mid x_{ik} \le s \}$ and $S_R(k, s) = \{ i \in S \mid x_{ik} > s \}$. The criterion is:
+\begin{equation}
+    \Delta \mathcal{I}(k, s) = \mathcal{I}(S) - \left[ \frac{|S_L|}{|S|} \mathcal{I}(S_L) + \frac{|S_R|}{|S|} \mathcal{I}(S_R) \right]
+\end{equation}
+
+\paragraph{Regression Impurity: Sum of Squared Errors (SSE):}
+\label{sec:cart_loss}
+For continuous targets, the node impurity is the sample variance:
+\begin{equation}
+    \mathcal{I}_{\text{MSE}}(S) = \frac{1}{|S|} \sum_{i \in S} (y_i - \bar{y}_S)^2
+\end{equation}
+\emph{Theoretical Justification:} Under the standard assumption of independent additive Gaussian noise $y_i = f(x_i) + \varepsilon_i$ with $\varepsilon_i \sim \mathcal{N}(0, \sigma^2)$, maximizing data log-likelihood is mathematically identical to minimizing the sum of squared residuals. Multiplying by $|S|$, maximizing $\Delta \mathcal{I}$ is equivalent to minimizing the total child SSE:
+\begin{equation}
+    \min_{k, s} \left[ \sum_{i \in S_L} (y_i - \bar{y}_L)^2 + \sum_{i \in S_R} (y_i - \bar{y}_R)^2 \right]
+\end{equation}
+
+\emph{Numerical Mini-Example:} Suppose parent node $S$ contains 4 target values: $y = \{1, 2, 8, 9\}$ with parent mean $\bar{y} = 5.0$.
+\begin{itemize}
+    \item Parent SSE: $\text{SSE}_{\text{parent}} = (1-5)^2 + (2-5)^2 + (8-5)^2 + (9-5)^2 = 16 + 9 + 9 + 16 = 50.0$.
+    \item A candidate split partitions the data into $S_L = \{1, 2\}$ ($\bar{y}_L = 1.5$) and $S_R = \{8, 9\}$ ($\bar{y}_R = 8.5$).
+    \item Left SSE: $(1-1.5)^2 + (2-1.5)^2 = 0.25 + 0.25 = 0.5$.
+    \item Right SSE: $(8-8.5)^2 + (9-8.5)^2 = 0.25 + 0.25 = 0.5$.
+    \item Total Child SSE: $\text{SSE}_{\text{split}} = 0.5 + 0.5 = 1.0$.
+\end{itemize}
+The error drops from $50.0$ down to $1.0$, yielding an impurity reduction of $\Delta \text{SSE} = 49.0$ ($98\%$ reduction in residual variance).
+
+\paragraph{Classification Impurity: Gini Impurity and Shannon Entropy:}
+Let $p_c = \frac{1}{|S|} \sum_{i \in S} \mathbb{I}(y_i = c)$ be the empirical probability of class $c$ in node $S$.
+\begin{equation}
+    \text{Gini Impurity: } G(S) = 1 - \sum_{c=1}^C p_c^2 = \sum_{c=1}^C p_c (1 - p_c)
+\end{equation}
+\begin{equation}
+    \text{Shannon Entropy: } H(S) = -\sum_{c=1}^C p_c \log_2 p_c
+\end{equation}
+
+\emph{Why Gini / Entropy Instead of Misclassification Error?}
+One might wonder why trees do not directly use the misclassification error rate $\mathcal{I}_{\text{error}}(S) = 1 - \max_c p_c$. 
+Mathematically, both Gini impurity and Shannon entropy are \textbf{strictly concave functions} of the probability simplex $\mathbf{p} \in \Delta^{C-1}$. By Jensen's Inequality, for any split where $p_L \neq p_R$:
+\begin{equation}
+    \mathcal{I}(p) > \frac{|S_L|}{|S|}\mathcal{I}(p_L) + \frac{|S_R|}{|S|}\mathcal{I}(p_R)
+\end{equation}
+Strict concavity guarantees that any split that differentiates class distributions yields strictly positive information gain. In contrast, the misclassification error $1 - \max_c p_c$ is only concave, not strictly concave: it can remain flat while the class distribution inside a node changes. For example, split a parent node containing $(100, 120)$ class-A/B samples into children $(30, 50)$ and $(70, 70)$. The parent misclassification error is $100/220 \approx 45.45\%$. The children have errors $30/80 = 37.5\%$ and $70/140 = 50\%$, so the weighted child error is $(80/220)\cdot 37.5\% + (140/220)\cdot 50\% = 45.45\%$: the misclassification gain is exactly zero. Gini impurity, however, drops from $0.4959$ to $0.4886$, correctly rewarding the increase in purity.
+
+\emph{Numerical Mini-Example (Gini):} A parent node contains 10 samples: 5 Class A, 5 Class B. Parent Gini: $G(S) = 1 - (0.5^2 + 0.5^2) = 0.50$. A split creates $S_L$ (4 Class A, 1 Class B) and $S_R$ (1 Class A, 4 Class B).
+Child Gini: $G(S_L) = 1 - (0.8^2 + 0.2^2) = 0.32$, and $G(S_R) = 0.32$.
+Weighted Child Gini: $0.5 \times 0.32 + 0.5 \times 0.32 = 0.32$.
+Impurity Gain: $\Delta G = 0.50 - 0.32 = 0.18$.
+
+\paragraph{The Myopic Blindspot of Greedy Splitting (The XOR Counter-Example):}
+The greedy heuristic is \textbf{locally myopic}: it evaluates splits only by their immediate, 1-step reduction in impurity, completely blind to downstream splits at deeper levels. 
+
+While greedy search succeeds in most monotonically separable distributions, it fails catastrophically on non-linear interaction geometries. The classic counter-example is the \textbf{XOR (Parity) Problem}:
+Consider four symmetric sample clusters in $\R^2$ with target $y = x_1 \oplus x_2$:
+\begin{align*}
+    (+1, +1) &\implies y = 0, \quad (-1, -1) \implies y = 0 \\
+    (+1, -1) &\implies y = 1, \quad (-1, +1) \implies y = 1
+\end{align*}
+Suppose the greedy algorithm evaluates a candidate split along $x_1$ at threshold $s = 0$:
+\begin{itemize}
+    \item $S_L$ ($x_1 \le 0$) receives $(-1, -1)$ [class 0] and $(-1, +1)$ [class 1]. Ratio: $50\%$ class 0, $50\%$ class 1.
+    \item $S_R$ ($x_1 > 0$) receives $(+1, -1)$ [class 1] and $(+1, +1)$ [class 0]. Ratio: $50\%$ class 0, $50\%$ class 1.
+\end{itemize}
+Because both child nodes have identical 50/50 class distributions, the impurity is completely unchanged: $\Delta \mathcal{I}(x_1, 0) = 0$. Evaluating $x_2$ at threshold 0 yields the exact same 50/50 split on both sides: $\Delta \mathcal{I}(x_2, 0) = 0$.
+
+Because the 1-step greedy search sees $\Delta \mathcal{I} = 0$ for all features, it falsely concludes that no feature has any predictive power, terminating early. Yet, a 2-level tree achieves $100\%$ classification accuracy! Greedy search is blind to multi-variable parity interactions.
+
+\subsection{The Fatal Flaw: Bias-Variance Decomposition and Structural Fragility}
+Decision trees exhibit two conflicting behaviors: deep trees fit training data with near-perfection, yet small perturbations cause them to fail on unseen data. To understand this mathematically, we decompose expected prediction error into its constituent components.
+
+\paragraph{Step 1: Bias-Variance Decomposition from First Principles:}
+Assume the true data-generating process is:
+\begin{equation}
+    y = f(x) + \varepsilon \quad \text{with } \E[\varepsilon] = 0, \quad \Var(\varepsilon) = \sigma^2, \quad \varepsilon \perp x
+\end{equation}
+Suppose we draw multiple independent training sets $\mathcal{D}$ from the true distribution. Training a tree on dataset $\mathcal{D}$ produces model $\hat{f}_\mathcal{D}(x)$. For a fixed, unseen test point $x_0$ with target $y_0 = f(x_0) + \varepsilon_0$:
+\begin{align}
+    \text{Bias: } &\operatorname{Bias}(\hat{f}_\mathcal{D}(x_0)) = \E_\mathcal{D}[\hat{f}_\mathcal{D}(x_0)] - f(x_0) \\
+    \text{Variance: } &\Var(\hat{f}_\mathcal{D}(x_0)) = \E_\mathcal{D}\left[ \left( \hat{f}_\mathcal{D}(x_0) - \E_\mathcal{D}[\hat{f}_\mathcal{D}(x_0)] \right)^2 \right]
+\end{align}
+
+\textbf{Theorem (Bias-Variance Decomposition).} \emph{The expected squared test error decomposes into three additive terms:}
+\begin{equation}
+    \E_{\mathcal{D}, \varepsilon_0} \left[ (y_0 - \hat{f}_\mathcal{D}(x_0))^2 \right] = \operatorname{Bias}^2(\hat{f}(x_0)) + \Var(\hat{f}(x_0)) + \sigma^2
+\end{equation}
+
+\emph{Proof.} Expanding the expectation:
+\begin{align}
+    \E\left[ (y_0 - \hat{f})^2 \right] &= \E\left[ \left( (f(x_0) - \E[\hat{f}]) + (\E[\hat{f}] - \hat{f}) + \varepsilon_0 \right)^2 \right] \nonumber \\
+    &= (f(x_0) - \E[\hat{f}])^2 + \E\left[ (\hat{f} - \E[\hat{f}])^2 \right] + \E[\varepsilon_0^2] + \text{CrossTerms} \nonumber \\
+    &= \operatorname{Bias}^2 + \Var + \sigma^2 \quad \blacksquare
+\end{align}
+where $\sigma^2$ is irreducible data noise.
+
+\emph{Intuitive Analogy (Target Archery):} Bias measures how far the center of your arrow cluster lies from the bullseye. Variance measures the spatial dispersion (scatter) of the arrows around their own center.
+
+\paragraph{Step 2: Why Deep Trees Have Near-Zero Bias:}
+As tree depth $d \to \infty$, the hyper-rectangular regions $R_j$ shrink in size. In an unconstrained deep tree, the algorithm splits recursively until each leaf contains only a single training instance ($|I_j| \approx 1$).
+At that point, $w_j = y_i$, driving the empirical training error to exactly zero. 
+
+Because piecewise-constant step functions with arbitrarily small intervals can interpolate any underlying surface $f(x)$, the average prediction across datasets $\E_\mathcal{D}[\hat{f}_\mathcal{D}(x_0)]$ converges directly to the truth $f(x_0)$. Consequently:
+\begin{equation}
+    \operatorname{Bias}(\hat{f}_{\text{deep}}(x_0)) \approx 0
+\end{equation}
+
+\paragraph{Step 3: Why Variance Explodes Catastrophically:}
+The near-zero bias of deep trees comes at an exorbitant price: variance explosion. This occurs through two distinct mechanisms:
+
+\paragraph{(a) Sample-Size Starvation at Leaves:}
+Suppose leaf $j$ captures $m = |I_j|$ independent training samples: $y_i = f(x_i) + \varepsilon_i$. The leaf prediction is the sample average $\bar{y} = \frac{1}{m}\sum_{i=1}^m y_i$. Assuming independent noise:
+\begin{equation}
+    \Var(\bar{y}) = \Var\left( \frac{1}{m}\sum_{i=1}^m y_i \right) = \frac{1}{m^2}\sum_{i=1}^m \Var(y_i) = \frac{\sigma^2}{m}
+\end{equation}
+\begin{itemize}
+    \item When $m$ is large (shallow tree), variance is damped by $\frac{1}{m} \to 0$.
+    \item When $m = 1$ (unpruned deep tree), $\Var(\bar{y}) = \sigma^2$. The prediction at that leaf is literally equal to the raw stochastic noise $\varepsilon_i$ of that single training instance! The tree memorizes noise verbatim.
+\end{itemize}
+
+\paragraph{(b) Perturbation Sensitivity and Structural Fragility:}
+At each node, the split is chosen via $\arg\max_{k, s} \Delta \mathcal{I}(k, s)$. Suppose at the root node, two features offer nearly identical impurity gains:
+\begin{equation*}
+    \text{Feature A: } \Delta \mathcal{I} = 0.210, \quad \text{Feature B: } \Delta \mathcal{I} = 0.208
+\end{equation*}
+The tree greedily selects Feature A. Now perturb the dataset slightly: remove or modify just 1 single sample out of 10,000. Feature B's gain shifts to $0.211$. 
+
+The root node now splits on Feature B! Because Feature B slices space along a completely different dimension, the child partitions are completely different. Every downstream branch, threshold, and leaf output diverges completely. This instability is known as \textbf{structural fragility}.
+
+\paragraph{Step 4: Empirical Generalization Consequences (The U-Shaped Curve):}
+As we increase maximum tree depth, the bias-variance tradeoff creates a characteristic U-shaped test error trajectory:
+\begin{table}[!htbp]
+\centering
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Tree Depth} & \textbf{Train Error} & \textbf{Test Error} & \textbf{Operational Regime \& Bias-Variance State} \\ \midrule
+Depth 1 (Stump)     & High                 & High                & High Bias, Low Variance (Severe Underfitting) \\
+Depth 5             & Moderate             & Lowest              & Optimal Equilibrium (Sweet Spot) \\
+Depth 20+           & $\approx 0$          & High                & Low Bias, Exploded Variance (Severe Overfitting) \\ \bottomrule
+\end{tabular}
+\end{table}
+
+This fundamental dilemma sets the stage for ensemble methods: how can we preserve the flexible, near-zero bias of decision trees while mathematically annihilating their fatal variance?
+
+% ==============================================================================
+\section{Ensemble Learning I: Bagging and Random Forests}
+% ==============================================================================
+
+\subsection{Bootstrap Aggregating (Bagging)}
+Leo Breiman (1996) proposed Bagging to eliminate variance while preserving low bias:
+\begin{enumerate}
+    \item Draw $B$ independent bootstrap datasets $\mathcal{D}_1, \dots, \mathcal{D}_B$ with replacement from $\mathcal{D}$.
+    \item Train $B$ fully grown, unpruned deep decision trees $\{f_b\}_{b=1}^B$ independently.
+    \item Aggregate predictions via simple averaging: $\bar{f}(x) = \frac{1}{B} \sum_{b=1}^B f_b(x)$.
+\end{enumerate}
+
+\subsection{Proof: Analytical Variance Reduction Under Correlation}
+\label{sec:bagging_proof}
+Let $f_1, \dots, f_B$ be identically distributed random estimators with individual variance $\Var(f_b) = \sigma^2$ and positive pairwise correlation $\rho = \Corr(f_i, f_j) > 0$ for all $i \neq j$.
+
+\textbf{Theorem 1.} \emph{The variance of the bagged ensemble estimator $\bar{f} = \frac{1}{B} \sum_{b=1}^B f_b$ satisfies:}
+\begin{equation}
+    \Var(\bar{f}) = \rho \sigma^2 + \frac{1 - \rho}{B} \sigma^2
+\end{equation}
+
+\emph{Proof.} Expanding the variance of the linear combination:
+\begin{align}
+    \Var(\bar{f}) &= \Var\left( \frac{1}{B} \sum_{b=1}^B f_b \right) = \frac{1}{B^2} \left[ \sum_{b=1}^B \Var(f_b) + \sum_{i \neq j} \Cov(f_i, f_j) \right] \nonumber \\
+    &= \frac{1}{B^2} \left[ B \sigma^2 + B(B - 1) \rho \sigma^2 \right] = \frac{\sigma^2}{B} + \frac{B - 1}{B} \rho \sigma^2 \nonumber \\
+    &= \rho \sigma^2 + \frac{1 - \rho}{B} \sigma^2. \quad \blacksquare
+\end{align}
+
+\textbf{Corollary.} As the number of trees approaches infinity ($B \to \infty$):
+\begin{equation}
+    \lim_{B \to \infty} \Var(\bar{f}) = \rho \sigma^2
+\end{equation}
+The ensemble variance is strictly lower-bounded by the inter-tree correlation $\rho$.
+
+\subsection{Random Forests: Driving \texorpdfstring{$\rho \to 0$}{rho -> 0} via Dual Subsampling}
+Recall the asymptotic lower bound from Theorem 1:
+\begin{equation}
+    \lim_{B \to \infty} \Var(\bar{f}) = \rho \sigma^2
+\end{equation}
+If the trees in an ensemble are strongly correlated ($\rho \approx 0.8$), then building $B = 1{,}000$ or even $1{,}000{,}000$ trees can never reduce the ensemble variance below $80\%$ of an individual tree's variance! Standard Bagging hits an impenetrable variance floor. 
+
+To understand why standard Bagging fails to drive $\rho \to 0$, and how Breiman's Random Forest (2001) mathematically resolves it, we analyze the source of inter-tree correlation.
+
+\paragraph{The Pathology of Naive Bagging (Dominant Feature Problem):}
+In tabular datasets, there typically exist one or two dominant predictor features that possess exceptionally high mutual information with the target (for instance, credit score in loan default). In naive Bagging:
+\begin{itemize}
+    \item At the root node of every single tree $b \in \{1, \dots, B\}$, the algorithm greedily searches across all $K$ features.
+    \item Even though each tree is trained on a different bootstrap sample, the dominant feature almost always achieves the highest impurity reduction $\Delta \mathcal{I}$.
+    \item Consequently, \textbf{nearly all $B$ trees select the identical dominant feature for their top-level splits}.
+\end{itemize}
+Because the structural scaffolding of all $B$ trees is aligned, their output predictions fluctuate in unison across test samples, producing severe positive correlation ($\rho \gg 0$).
+
+\paragraph{Mechanism 1: Random Feature Subsampling (Feature Bagging):}
+Random Forests introduce a deliberate algorithmic restriction: at \emph{every candidate split}, the tree is strictly forbidden from evaluating all $K$ features. Instead, it randomly samples a small candidate subset $\mathcal{M} \subset \{1, \dots, K\}$ of size $m \ll K$ (typically $m = \lfloor \sqrt{K} \rfloor$ for classification, and $m = \lfloor K/3 \rfloor$ for regression).
+
+\emph{Probabilistic Analysis of Feature Exclusion:}
+Let $x_{\text{dominant}}$ be the single most powerful feature. What is the probability that $x_{\text{dominant}}$ is included in the candidate split set $\mathcal{M}$ at any given node?
+\begin{equation}
+    P(x_{\text{dominant}} \in \mathcal{M}) = \frac{\binom{K-1}{m-1}}{\binom{K}{m}} = \frac{m}{K}
+\end{equation}
+For a typical tabular dataset with $K = 100$ features and $m = \sqrt{100} = 10$:
+\begin{equation}
+    P(x_{\text{dominant}} \in \mathcal{M}) = \frac{10}{100} = 0.10 \implies P(x_{\text{dominant}} \notin \mathcal{M}) = 0.90
+\end{equation}
+In \textbf{$90\%$ of all split opportunities}, the tree is mathematically forced to ignore the dominant feature and look elsewhere! 
+
+\emph{Analytical Consequence on $\rho$:}
+By suppressing the dominant feature in 9 out of 10 nodes, trees are compelled to explore secondary, tertiary, and latent surrogate features that would otherwise remain permanently shadowed. Tree $i$ may split on feature 14 at its root, while Tree $j$ splits on feature 83. The resulting tree topologies become structurally orthogonal, collapsing the covariance $\Cov(f_i, f_j) \to 0$, and driving the inter-tree correlation $\rho \to 0$.
+
+\paragraph{Mechanism 2: Instance Subsampling (Bootstrap Sample Decorrelation):}
+Compounding feature subsampling, each tree is trained on a distinct bootstrap sample $\mathcal{D}_b$ drawn with replacement from $N$ instances. 
+The probability of a specific instance $i$ never being selected across $N$ independent draws is:
+\begin{equation}
+    P(\text{Sample } i \notin \mathcal{D}_b) = \left( 1 - \frac{1}{N} \right)^N \xrightarrow{N \to \infty} \frac{1}{e} \approx 0.368 = 36.8\%
+\end{equation}
+Each tree is exposed to approximately only $1 - 1/e \approx 63.2\%$ of the training population (with $36.8\%$ remaining Out-Of-Bag). Two independent bootstrap draws share only a fraction of their training instances, providing sample-level perturbation that reinforces structural diversity.
+
+\paragraph{The Net Trade-Off: Why Random Forests Win:}
+Restricting each split to $m \approx \sqrt{K}$ features slightly degrades the strength of each individual tree (increasing single-tree variance $\sigma^2$ or bias slightly). However, because $\rho$ collapses drastically (e.g., from $\rho = 0.85$ down to $\rho = 0.05$), the ensemble variance:
+\begin{equation}
+    \Var(\bar{f}) = \rho \sigma^2 + \frac{1-\rho}{B}\sigma^2
+\end{equation}
+plummets far more aggressively than the slight increase in $\sigma^2$. The net reduction in total prediction variance is substantial.
+
+\subsection{Majority Voting in Classification: Condorcet's Jury Theorem and Hoeffding's Bound}
+\label{sec:condorcet_hoeffding}
+
+While Section~\ref{sec:bagging_proof} analyzed the reduction of ensemble variance in continuous regression via arithmetic averaging, how does ensembling operate mathematically in discrete binary classification?
+
+Consider a binary classification task with labels $y \in \{-1, +1\}$. Suppose we assemble an ensemble of $M$ base classifiers $\{h_m(x)\}_{m=1}^M$ that synthesize their individual predictions through simple unweighted majority voting:
+\begin{equation}
+    H(x) = \sign\left( \sum_{m=1}^M h_m(x) \right)
+\end{equation}
+Assume for algebraic clarity that $M$ is odd (to preclude ties), and that the base classifiers are \textbf{mutually statistically independent}, each possessing an identical generalization error rate:
+\begin{equation}
+    \varepsilon_m = \varepsilon < \frac{1}{2}
+\end{equation}
+Because $\varepsilon < 0.5$, each individual classifier is ``weak'' but strictly superior to random coin tossing, maintaining a fixed positive edge:
+\begin{equation}
+    \gamma = \frac{1}{2} - \varepsilon > 0
+\end{equation}
+
+\paragraph{Combinatorial Formulation of Majority Voting Error:}
+The ensemble decision $H(x)$ produces an incorrect prediction if and only if a strict majority of the base models err simultaneously---that is, when at least $\lceil M / 2 \rceil$ individual classifiers make mistakes.
+
+Let the random variable $X$ denote the total number of base classifiers that misclassify instance $x$:
+\begin{equation}
+    X = \sum_{m=1}^M \mathbb{I}[h_m(x) \ne y]
+\end{equation}
+Because the $M$ base classifiers err independently with probability $\varepsilon$, the random variable $X$ follows a Binomial distribution:
+\begin{equation}
+    X \sim \text{Binomial}(M, \varepsilon)
+\end{equation}
+with expected number of misclassifications $\E[X] = M\varepsilon$.
+
+The exact probability that the majority voting ensemble makes an error is given by the cumulative binomial tail sum:
+\begin{equation}
+    P_{\text{error}} = P\left( X \ge \frac{M}{2} \right) = \sum_{k=\lceil M/2 \rceil}^M \binom{M}{k} \varepsilon^k (1 - \varepsilon)^{M - k}
+\end{equation}
+
+\paragraph{Condorcet's Jury Theorem (1785):}
+This combinatorial sum represents the mathematical foundation of \textbf{Condorcet's Jury Theorem}, formulated by the French mathematician and political philosopher Marquis de Condorcet in 1785. The theorem establishes two profound properties:
+\begin{enumerate}
+    \item If each voter (or classifier) decides correctly with probability $p = 1 - \varepsilon > \frac{1}{2}$, adding more independent voters strictly increases the probability that the majority verdict is correct: $P_{\text{error}}(M + 2) < P_{\text{error}}(M)$.
+    \item In the asymptotic limit as the jury size approaches infinity, the probability of a correct majority decision converges to certainty:
+    \begin{equation}
+        \lim_{M \to \infty} P_{\text{error}} = 0
+    \end{equation}
+\end{enumerate}
+
+\paragraph{Exponential Error Decay via Hoeffding's Inequality:}
+To determine the precise mathematical convergence rate at which $P_{\text{error}}$ collapses toward zero as $M$ increases, we apply \textbf{Hoeffding's Inequality} (Wassily Hoeffding, 1963).
+
+\textbf{Theorem 2 (Condorcet-Hoeffding Error Bound).} \emph{For an ensemble of $M$ statistically independent base classifiers, each having error probability $\varepsilon < \frac{1}{2}$, the majority voting classification error is strictly upper-bounded by an exponentially decaying function of ensemble size $M$ and edge $\gamma = \frac{1}{2} - \varepsilon$:}
+\begin{equation}
+    P_{\text{error}} \le \exp\left( -2M\left( \frac{1}{2} - \varepsilon \right)^2 \right) = \exp\left( -2M\gamma^2 \right)
+\end{equation}
+
+\emph{Proof.} Define the indicator variables $Z_m = \mathbb{I}[h_m(x) \ne y]$ for each $m \in \{1, \dots, M\}$. Each $Z_m$ is an independent Bernoulli random variable bounded strictly on the unit interval: $Z_m \in [0, 1]$, with expectation $\E[Z_m] = \varepsilon$.
+
+Hoeffding's inequality for bounded independent random variables states that for any arbitrary positive scalar deviation $\delta > 0$:
+\begin{equation}
+    P\left( \frac{1}{M} \sum_{m=1}^M Z_m - \varepsilon \ge \delta \right) \le \exp\left( -2M\delta^2 \right)
+\end{equation}
+Observe that the majority voting ensemble commits an error if and only if the fraction of incorrect base classifiers reaches or exceeds one-half:
+\begin{equation}
+    \frac{1}{M} X = \frac{1}{M} \sum_{m=1}^M Z_m \ge \frac{1}{2}
+\end{equation}
+Subtracting the mean error rate $\varepsilon$ from both sides of the inequality:
+\begin{equation}
+    P_{\text{error}} = P\left( \frac{1}{M} X \ge \frac{1}{2} \right) = P\left( \frac{1}{M} \sum_{m=1}^M Z_m - \varepsilon \ge \frac{1}{2} - \varepsilon \right)
+\end{equation}
+Setting the deviation threshold equal to the classifier's edge: $\delta = \frac{1}{2} - \varepsilon = \gamma > 0$. Substituting $\delta$ directly into Hoeffding's bound:
+\begin{equation}
+    P_{\text{error}} \le \exp\left( -2M\left( \frac{1}{2} - \varepsilon \right)^2 \right) = \exp\left( -2M\gamma^2 \right) \quad \blacksquare
+\end{equation}
+
+\textbf{Asymptotic Behavior:}
+Because $\gamma = \frac{1}{2} - \varepsilon > 0$, the exponent is strictly negative. Taking the limit as $M \to \infty$:
+\begin{equation}
+    \lim_{M \to \infty} P_{\text{error}} \le \lim_{M \to \infty} \exp\left( -2M\left( \frac{1}{2} - \varepsilon \right)^2 \right) = 0
+\end{equation}
+\calloutbox{\textbf{Probabilistic Conclusion:} The error probability of a majority voting system decays toward zero at an \textbf{exponential rate} with respect to ensemble size $M$. This mathematically proves that pooling an ensemble of simple weak learners can construct an arbitrarily accurate strong estimator.}
+
+\paragraph{Numerical Demonstration of Error Collapse:}
+Table~\ref{tab:condorcet_convergence} displays the rapid collapse of classification error for base classifiers with individual error rate $\varepsilon = 0.40$ ($\gamma = 0.10$, performing only $10\%$ better than random guessing).
+
+\begin{table}[!htbp]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}cccc@{}}
+\toprule
+\textbf{Ensemble Size ($M$)} & \textbf{Exact Binomial $P_{\text{error}}$} & \textbf{Hoeffding Bound ($\le e^{-2M\gamma^2}$)} & \textbf{Ensemble Regime} \\ \midrule
+$1$                          & $40.00\%$                                  & $\le 98.02\%$                                    & Baseline weak learner \\
+$11$                         & $24.65\%$                                  & $\le 80.25\%$                                    & Noticeable reduction  \\
+$51$                         & $7.35\%$                                   & $\le 36.06\%$                                    & High accuracy         \\
+$101$                        & $2.09\%$                                   & $\le 13.26\%$                                    & Strong predictor      \\
+$251$                        & $0.07\%$                                   & $\le 0.66\%$                                     & Near-perfect decision \\ \bottomrule
+\end{tabular}
+\caption{Majority voting error collapse under Condorcet's theorem with base error $\varepsilon = 0.40$ ($\gamma = 0.10$).}
+\label{tab:condorcet_convergence}
+\end{table}
+
+\paragraph{The Fragile Assumption: The Threat of Inter-Classifier Correlation:}
+The extraordinary guarantee of Condorcet's theorem rests entirely upon the foundational premise that the base classifiers make \textbf{statistically independent errors}.
+
+In real-world machine learning on finite datasets, statistical independence is routinely violated:
+\begin{itemize}
+    \item Base models trained on the same data sample share common inductive biases.
+    \item Outlier samples or noise points that confuse Tree 1 will similarly confuse Tree 2, inducing positive error correlation ($\Cov(Z_i, Z_j) > 0$).
+    \item Under positive correlation, the Binomial variance does not collapse to zero; instead, an error floor emerges (analogous to the $\rho \sigma^2$ variance floor proved in Theorem 1).
+\end{itemize}
+This crucial vulnerability directly motivates the two divergent paradigms of modern ensemble learning:
+\begin{enumerate}
+    \item \textbf{Random Forests (Section~\ref{sec:bagging_proof}):} Fight correlation by injecting artificial variance (bootstrap sampling and random feature restriction) to drive $\Cov \to 0$ while keeping trees independent.
+    \item \textbf{Boosting (Chapters 4 \& 5):} Abandon the unrealistic assumption of statistical independence altogether. Instead of hoping models will make independent errors, Boosting forces models to be \textbf{deliberately interdependent}, training each subsequent tree sequentially to focus exclusively on the errors committed by the ensemble so far.
+\end{enumerate}
+
+% ==============================================================================
+\section{Ensemble Learning II: The Limits of Bagging and The Rise of Boosting}
+% ==============================================================================
+
+\subsection{Why Bagging and Random Forests Fall Short}
+Despite their robustness, Random Forests hit fundamental limitations on complex tabular tasks:
+\begin{enumerate}
+    \item \textbf{Inability to Reduce Bias (Mathematical Invariance of Bias):}
+    Bagging forms its ensemble prediction by simple linear averaging:
+    \begin{equation}
+        \bar{f}(x) = \frac{1}{B} \sum_{b=1}^B f_b(x)
+    \end{equation}
+    where each tree $f_b(x)$ is trained on an independent bootstrap dataset drawn from $\mathcal{D}$.
+    Because mathematical expectation is a linear operator, we evaluate the expected prediction across the data-generating distribution:
+    \begin{equation}
+        \E[\bar{f}(x)] = \E\left[ \frac{1}{B} \sum_{b=1}^B f_b(x) \right] = \frac{1}{B} \sum_{b=1}^B \E[f_b(x)]
+    \end{equation}
+    Assuming all bootstrap estimators are identically distributed with $\E[f_b(x)] = \E[f_1(x)]$ for all $b \in \{1, \dots, B\}$:
+    \begin{equation}
+        \E[\bar{f}(x)] = \frac{1}{B} \cdot B \, \E[f_1(x)] = \E[f_1(x)]
+    \end{equation}
+    Subtracting the true target function $f(x)$ from both sides yields the fundamental bias identity:
+    \begin{equation}
+        \operatorname{Bias}(\bar{f}(x)) = \E[\bar{f}(x)] - f(x) = \E[f_1(x)] - f(x) = \operatorname{Bias}(f_1(x))
+    \end{equation}
+    \emph{Profound Implication:} The bias of a Bagging ensemble is strictly identical to the bias of a single individual constituent tree. Averaging thousands of trees cancels out stochastic noise and random sample fluctuations (variance), but leaves \textbf{systematic bias completely untouched}. If a base decision tree underfits or systematically underestimates high values, averaging $10{,}000$ such trees will underfit with the exact same magnitude! Bagging cannot fix an intrinsically biased learner.
+    \item \textbf{Zero Communication / Blind Parallelism:} Tree $b$ is trained in total isolation from tree $b-1$, repeatedly failing on the same difficult samples.
+    \item \textbf{Memory Inefficiency:} To maintain low bias, each tree must be grown to extreme depths, resulting in massive model sizes (hundreds of megabytes) and slow inference latency.
+    \item \textbf{No Custom Objective Optimization:} Averaging cannot directly optimize non-standard loss functions (e.g., asymmetric quantile loss, ranking metrics).
+\end{enumerate}
+
+\subsection{The Boosting Paradigm: Sequential Error Correction}
+\label{sec:boosting_residuals}
+Boosting fundamentally inverts the ensemble philosophy of Bagging: instead of constructing parallel, independent estimators to eliminate variance, it constructs a sequential chain of \textbf{weak base learners} (typically shallow decision trees) designed specifically to eliminate systematic bias.
+
+\paragraph{Core Contrast: Bagging / Random Forests vs. Boosting:}
+The mechanical differences between the two paradigms are summarized in Table~\ref{tab:bagging_vs_boosting}.
+
+\begin{table}[!htbp]
+\centering
+\small
+\begin{tabular}{@{}p{4.2cm}p{5.3cm}p{5.3cm}@{}}
+\toprule
+\textbf{Dimension} & \textbf{Bagging / Random Forests} & \textbf{Boosting (GBDT)} \\ \midrule
+\textbf{Training Protocol}       & Embarrassingly parallel, independent & Strictly sequential (tree $t$ depends on $t-1$) \\
+\textbf{Base Learner Topology}   & Deep, unpruned trees (low bias, high variance) & Shallow trees / stumps (high bias, low variance) \\
+\textbf{Primary Objective}       & Variance reduction ($\rho \sigma^2$) & Bias reduction (residual elimination) \\
+\textbf{Ensemble Aggregation}    & Uniform averaging: $\bar{f} = \frac{1}{B}\sum f_b$ & Additive accumulation: $F = \hat{y}_0 + \sum \eta f_t$ \\ \bottomrule
+\end{tabular}
+\caption{Fundamental architectural divergence between Bagging and Boosting.}
+\label{tab:bagging_vs_boosting}
+\end{table}
+
+\paragraph{The Additive Recurrence Relation:}
+At boosting round $t$, the current model's prediction is updated via the recurrence:
+\begin{equation}
+    \hat{y}_i^{(t)} = \hat{y}_i^{(t-1)} + \eta f_t(x_i)
+\end{equation}
+The mathematical components of this update are defined as follows:
+\begin{itemize}
+    \item $\hat{y}_i^{(t)} \in \R$: The cumulative ensemble prediction for training instance $i$ after incorporating $t$ trees.
+    \item $\hat{y}_i^{(t-1)} \in \R$: The baseline prediction generated by the preceding ensemble of $t-1$ trees.
+    \item $f_t(x_i) \in \R$: The functional response of the $t$-th individual weak tree evaluated at $x_i$, representing a small, localized corrective step.
+    \item $\eta \in (0, 1]$: The \textbf{shrinkage factor} (learning rate), which scales down the contribution of each tree to ensure smooth, controlled updates.
+\end{itemize}
+
+The final deployed model is the weighted additive superposition across all $M$ boosting rounds:
+\begin{equation}
+    F(x) = \hat{y}_0 + \sum_{t=1}^M \eta f_t(x)
+\end{equation}
+where $\hat{y}_0 = \arg\min_c \sum_{i=1}^N L(y_i, c)$ is the global base initialization. For squared error regression, $\hat{y}_0 = \bar{y} = \frac{1}{N}\sum_{i=1}^N y_i$.
+
+\paragraph{Why Additive Stacking Eliminates Systematic Bias:}
+To understand why sequential accumulation drives bias to zero, we analyze the progression of error residuals from first principles.
+
+\paragraph{Step 1: The Residual as Missing Signal:}
+For standard squared error loss $L(y, \hat{y}) = \frac{1}{2}(y - \hat{y})^2$, the model error on sample $i$ at iteration $t-1$ is the \textbf{residual}:
+\begin{equation}
+    r_i^{(t-1)} = y_i - \hat{y}_i^{(t-1)}
+\end{equation}
+The residual $r_i^{(t-1)}$ explicitly measures how much underlying signal remains uncaptured by the existing ensemble.
+
+\paragraph{Step 2: Fitting Weak Trees to Residuals:}
+Rather than fitting raw targets $y_i$, tree $f_t$ is trained to predict the residual vector: $f_t(x_i) \approx r_i^{(t-1)}$. Updating the prediction:
+\begin{equation}
+    \hat{y}_i^{(t)} = \hat{y}_i^{(t-1)} + \eta f_t(x_i)
+\end{equation}
+In the extreme scenario where $f_t$ captures the residual perfectly and $\eta = 1$, the updated prediction is:
+\begin{equation}
+    \hat{y}_i^{(t)} = \hat{y}_i^{(t-1)} + 1 \cdot (y_i - \hat{y}_i^{(t-1)}) = y_i
+\end{equation}
+The training error is annihilated in a single step!
+
+\paragraph{Step 3: Generalization to Functional Gradient Descent:}
+Residual fitting is not an isolated heuristic for squared error; it is the direct manifestation of \textbf{gradient descent in function space}. For an arbitrary differentiable loss $L(y_i, \hat{y}_i)$, the negative gradient evaluated at the current prediction is:
+\begin{equation}
+    g_i = -\left[ \frac{\partial L(y_i, \hat{y}_i)}{\partial \hat{y}_i} \right]
+\end{equation}
+For squared error loss:
+\begin{equation}
+    -\frac{\partial}{\partial \hat{y}} \left[ \frac{1}{2}(y - \hat{y})^2 \right] = y - \hat{y} = r_i
+\end{equation}
+The residual $r_i$ is literally the negative gradient of squared error loss! 
+
+In general Boosting, each successive tree learns to approximate the negative gradient $-\nabla L$. Instead of taking a step along a vector of static weights, the model steps along a function vector spanned by a decision tree. Consequently:
+\begin{itemize}
+    \item Replacing $L$ with asymmetric quantile pinball loss yields \textbf{Quantile Boosting}.
+    \item Replacing $L$ with ranking loss (Pairwise/Listwise NDCG) yields \textbf{LambdaMART / Ranking Boosting}.
+    \item Replacing $L$ with logistic log-loss yields \textbf{Binary Classification Boosting}.
+\end{itemize}
+This flexibility provides the complete theoretical answer to Limitation 4 of Bagging.
+
+\paragraph{Step 4: Exponential Decay of Residuals (Bias Reduction Proof):}
+Consider an idealized setting where each shallow tree successfully captures a constant fraction of the residual: $f_t(x_i) \approx r_i^{(t-1)}$. The updated residual after step $t$ is:
+\begin{equation}
+    r_i^{(t)} = y_i - \hat{y}_i^{(t)} = y_i - \left( \hat{y}_i^{(t-1)} + \eta r_i^{(t-1)} \right) = r_i^{(t-1)} - \eta r_i^{(t-1)} = (1 - \eta) r_i^{(t-1)}
+\end{equation}
+Unrolling this recurrence across $t$ sequential boosting iterations yields:
+\begin{equation}
+    r_i^{(t)} = (1 - \eta)^t r_i^{(0)}
+\end{equation}
+Because the shrinkage factor satisfies $\eta \in (0, 1]$, the contraction factor is strictly bounded: $|1 - \eta| < 1$. Taking the limit as the number of iterations grows:
+\begin{equation}
+    \lim_{t \to \infty} r_i^{(t)} = \lim_{t \to \infty} (1 - \eta)^t r_i^{(0)} = 0
+\end{equation}
+\emph{Theoretical Conclusion:} The remaining residual error decays \textbf{exponentially} toward zero. Unlike Bagging (where the expected prediction $\E[\bar{f}] = \E[f_1]$ remains frozen regardless of ensemble size), Boosting dynamically marches the expectation $\E[\hat{y}^{(t)}]$ toward the true regression function $f(x)$ at every iteration, driving systematic bias toward zero.
+
+Each individual tree only needs to learn a simple, crude slice of the data. Their additive accumulation synthesizes an arbitrarily complex, highly nonlinear surface. Bias is eradicated through the \textbf{number of iterations $M$}, not by building individual deep trees.
+
+\paragraph{Numerical Walkthrough:}
+Consider a 1-dimensional toy dataset of 3 samples with true targets:
+\begin{equation*}
+    y = [3, 5, 7]^\top
+\end{equation*}
+We initialize with the global mean: $\hat{y}^{(0)} = \bar{y} = [5, 5, 5]^\top$. 
+The initial residual vector is:
+\begin{equation*}
+    r^{(0)} = y - \hat{y}^{(0)} = [3-5, 5-5, 7-5]^\top = [-2, 0, 2]^\top
+\end{equation*}
+We set the shrinkage parameter to $\eta = 0.5$.
+
+\begin{enumerate}
+    \item \textbf{Iteration 1:} Tree $f_1$ is fitted to $r^{(0)}$, outputting $f_1 = [-2, 0, 2]^\top$. The updated prediction is:
+    \begin{equation*}
+        \hat{y}^{(1)} = [5, 5, 5]^\top + 0.5 \cdot [-2, 0, 2]^\top = [4, 5, 6]^\top
+    \end{equation*}
+    The new residual vector is:
+    \begin{equation*}
+        r^{(1)} = [3, 5, 7]^\top - [4, 5, 6]^\top = [-1, 0, 1]^\top \quad (\text{Residual cut exactly by } 50\%)
+    \end{equation*}
+    \item \textbf{Iteration 2:} Tree $f_2$ is fitted to $r^{(1)}$, outputting $f_2 = [-1, 0, 1]^\top$. The updated prediction is:
+    \begin{equation*}
+        \hat{y}^{(2)} = [4, 5, 6]^\top + 0.5 \cdot [-1, 0, 1]^\top = [3.5, 5, 6.5]^\top
+    \end{equation*}
+    The new residual vector is:
+    \begin{equation*}
+        r^{(2)} = [3, 5, 7]^\top - [3.5, 5, 6.5]^\top = [-0.5, 0, 0.5]^\top = (1 - 0.5)^2 r^{(0)}
+    \end{equation*}
+\end{enumerate}
+Every step systematically contracts the residual vector by $(1 - \eta)$, converging rapidly toward ground truth without requiring any single tree to be deep.
+
+\paragraph{The Critical Role of Shrinkage $\eta$ (Regulating Variance):}
+Why not set $\eta = 1$ to eliminate residuals in the fewest possible steps?
+\begin{itemize}
+    \item If $\eta = 1$, each tree attempts to absorb $100\%$ of its current residual in a single leap. If the data contains stochastic noise $\varepsilon_i$, tree $t$ overfits to the noise, and tree $t+1$ must aggressively oscillate to correct the erroneous noise fit of tree $t$. The ensemble variance explodes rapidly.
+    \item By enforcing a small shrinkage $\eta \in [0.01, 0.1]$, each tree contributes only a cautious fraction of its prediction. This forces subsequent trees to average out random noise over many steps, preserving stability.
+\end{itemize}
+The trade-off of a small shrinkage $\eta$ is computational: it requires more trees $M$ to converge. In practice, practitioners fix a small $\eta$ and determine the optimal number of trees $M$ using \textbf{early stopping} on a validation set.
+
+Thus, the core principle of Boosting is fully realized:
+\begin{center}
+    \emph{Shallow depth constraints limit step complexity; shrinkage $\eta$ limits step magnitude.}
+\end{center}
+
+% ==============================================================================
+\section{Evolution of Boosting: From AdaBoost to Friedman's GBDT}
+% ==============================================================================
+
+\subsection{The Theory of Weak Learnability}
+
+\paragraph{Intuition: The Power of Weak Consensus:}
+Consider a binary prediction task (such as predicting a coin toss or a directional price movement). An individual who predicts correctly $55\%$ of the time is only marginally better than pure random chance ($50\%$). Individually, such a predictor is termed ``weak'' and appears practically useless. However, suppose we assemble $1{,}000$ independent weak predictors, each maintaining a consistent, slight edge over random guessing. If we synthesize their collective votes through a principled, mathematically weighted mechanism, the resulting aggregated consensus achieves near-certain accuracy.
+
+This insight forms the conceptual foundation of \textbf{Boosting}: an ensemble methodology that provably transforms an ensemble of computationally simple, high-bias \emph{weak learners} into an arbitrarily accurate \emph{strong learner}.
+
+\paragraph{Formal Mathematical Setup:}
+Let $\mathcal{X} \subseteq \R^K$ denote the input feature space, and let $y \in \{-1, +1\}$ denote binary classification labels. A base classifier is a mapping $h: \mathcal{X} \to \{-1, +1\}$. 
+
+Let $D$ represent a probability distribution over the training sample indices $\{1, \dots, N\}$, defined by non-negative sample weights $\mathbf{w} = [w_1, \dots, w_N]^\top$ such that $w_i \ge 0$ and $\sum_{i=1}^N w_i = 1$. The \textbf{weighted classification error} of classifier $h$ under distribution $D$ is:
+\begin{equation}
+    \varepsilon(h) = \sum_{i=1}^N w_i \cdot \mathbb{I}[h(x_i) \ne y_i]
+\end{equation}
+where $\mathbb{I}[\cdot]$ is the indicator function. The error $\varepsilon(h)$ represents the total probability mass of training samples misclassified by $h$.
+
+\paragraph{Mathematical Definitions: Weak vs. Strong Learners:}
+Under the Probably Approximately Correct (PAC) learning framework introduced by Leslie Valiant (1984):
+\begin{enumerate}
+    \item \textbf{Random Guessing Baseline:} A purely random coin flip achieves expected error $\varepsilon = \frac{1}{2}$.
+    \item \textbf{Weak Learner (Weak Learnability):} An algorithm is a weak learner if there exists a fixed constant edge $\gamma > 0$ such that, for \emph{any} arbitrary probability distribution $D$ over the data, the algorithm outputs a hypothesis $h$ satisfying:
+    \begin{equation}
+        \varepsilon(h) \le \frac{1}{2} - \gamma
+    \end{equation}
+    The constant $\gamma$ may be arbitrarily small (e.g., $\gamma = 0.01$), but it must remain strictly positive and independent of sample size $N$ and distribution $D$.
+    \item \textbf{Strong Learner (Strong Learnability):} An algorithm is a strong learner if, for any arbitrarily small error tolerance $\epsilon > 0$ and failure confidence $\delta > 0$, it outputs a hypothesis $H$ with error $\le \epsilon$ with probability at least $1 - \delta$, given a polynomial number of samples.
+\end{enumerate}
+
+\paragraph{Schapire's Equivalence Theorem (1990):}
+For decades, machine learning theorists debated whether a weak learner could theoretically be boosted into a strong learner. In a landmark breakthrough, Robert Schapire (1990) proved the \textbf{Weak and Strong Learnability Equivalence Theorem}:
+\begin{center}
+    \emph{A concept class is weakly learnable if and only if it is strongly learnable.}
+\end{center}
+This foundational theorem established that high accuracy does not require complex, deep models; it can be achieved by strategically coordinating a collection of rough, simple rules.
+
+\paragraph{Concrete Example: The Decision Stump:}
+The canonical weak learner in tree-based boosting is the \textbf{Decision Stump}---a 1-level decision tree consisting of a single internal root node and two terminal leaves:
+\begin{equation}
+    h(x) = s \cdot \operatorname{sign}(x_j - t), \quad s \in \{-1, +1\}
+\end{equation}
+A decision stump tests a single feature against a single threshold $t$, partitioning space with an axis-aligned hyperplane. 
+
+\emph{Numerical Illustration:} Consider 4 one-dimensional data points: $x = [1, 2, 3, 4]^\top$ with labels $y = [+1, +1, -1, -1]^\top$. A stump testing $x \le 2.5$ classifies all 4 points with zero error: $\varepsilon = 0$. 
+
+Now consider a noisy tabular dataset where a stump misclassifies 3 out of 10 uniformly weighted samples ($w_i = 0.1$). The weighted error is $\varepsilon = 0.30$. The stump's edge over random chance is:
+\begin{equation*}
+    \gamma = \frac{1}{2} - \varepsilon = 0.50 - 0.30 = 0.20 > 0
+\end{equation*}
+Because $\gamma = 0.20 > 0$, this humble decision stump qualifies as a valid weak learner. A single stump possesses severe bias (underfitting), which is the defining characteristic of weak learners.
+
+\subsection{AdaBoost: Formulation, Parameter Derivation, and Convergence}
+\label{sec:adaboost}
+Freund and Schapire (1997) formalized \textbf{AdaBoost (Adaptive Boosting)}, providing the first computationally efficient, practical realization of Schapire's theoretical equivalence theorem.
+
+\paragraph{The AdaBoost Algorithm:}
+Given training dataset $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^N$ with $y_i \in \{-1, +1\}$:
+\begin{enumerate}
+    \item Initialize uniform sample weights: $w_i^{(1)} = \frac{1}{N}$ for all $i \in \{1, \dots, N\}$.
+    \item For boosting iteration $t = 1, \dots, M$:
+    \begin{enumerate}
+        \item Train weak learner $h_t: \mathcal{X} \to \{-1, +1\}$ using weights $\mathbf{w}^{(t)}$ to minimize weighted error:
+        \begin{equation}
+            \varepsilon_t = \sum_{i=1}^N w_i^{(t)} \cdot \mathbb{I}[h_t(x_i) \ne y_i]
+        \end{equation}
+        \item Compute the \textbf{learner voting weight} $\alpha_t \in \R$:
+        \begin{equation}
+            \alpha_t = \frac{1}{2} \ln \left( \frac{1 - \varepsilon_t}{\varepsilon_t} \right)
+        \end{equation}
+        \item Update instance weights for the next iteration:
+        \begin{equation}
+            w_i^{(t+1)} = \frac{w_i^{(t)} \exp\left( -\alpha_t y_i h_t(x_i) \right)}{Z_t}
+        \end{equation}
+        where $Z_t = \sum_{i=1}^N w_i^{(t)} \exp(-\alpha_t y_i h_t(x_i))$ is the normalization factor ensuring $\sum_i w_i^{(t+1)} = 1$.
+    \end{enumerate}
+    \item The final strong classifier aggregates votes:
+    \begin{equation}
+        H(x) = \operatorname{sign}\left( \sum_{t=1}^M \alpha_t h_t(x) \right)
+    \end{equation}
+\end{enumerate}
+
+\paragraph{Behavior of the Weight Update:}
+The term $y_i h_t(x_i) \in \{-1, +1\}$ is the classification margin:
+\begin{itemize}
+    \item If sample $i$ is correctly classified ($y_i h_t(x_i) = +1$): its weight is scaled by $\exp(-\alpha_t) < 1$ (downweighted).
+    \item If sample $i$ is misclassified ($y_i h_t(x_i) = -1$): its weight is scaled by $\exp(+\alpha_t) > 1$ (upweighted).
+\end{itemize}
+Subsequent weak learners are thus algorithmically compelled to focus their capacity on the samples misclassified by previous rounds.
+
+\paragraph{Analytical Derivation of the Voting Weight $\alpha_t$:}
+Why does $\alpha_t$ take the specific functional form $\frac{1}{2}\ln\frac{1-\varepsilon_t}{\varepsilon_t}$? 
+
+AdaBoost can be derived as greedy coordinate descent minimizing the \textbf{exponential loss} over the training data. At iteration $t$, we seek $\alpha$ minimizing the normalization partition function $Z(\alpha)$:
+\begin{equation}
+    Z(\alpha) = \sum_{i=1}^N w_i^{(t)} \exp\left( -\alpha y_i h_t(x_i) \right)
+\end{equation}
+Partitioning the summation into correctly classified instances ($y_i = h_t(x_i)$) and misclassified instances ($y_i \ne h_t(x_i)$):
+\begin{align}
+    Z(\alpha) &= \sum_{i: y_i = h_t(x_i)} w_i^{(t)} e^{-\alpha} + \sum_{i: y_i \ne h_t(x_i)} w_i^{(t)} e^{+\alpha} \nonumber \\
+    &= (1 - \varepsilon_t) e^{-\alpha} + \varepsilon_t e^{\alpha}
+\end{align}
+To find the optimal step size $\alpha^*$, we differentiate $Z(\alpha)$ with respect to $\alpha$ and set the derivative to zero:
+\begin{equation}
+    \frac{d Z(\alpha)}{d \alpha} = -(1 - \varepsilon_t) e^{-\alpha} + \varepsilon_t e^{\alpha} = 0
+\end{equation}
+Multiplying both sides by $e^{\alpha}$:
+\begin{equation}
+    \varepsilon_t e^{2\alpha} = 1 - \varepsilon_t \implies e^{2\alpha} = \frac{1 - \varepsilon_t}{\varepsilon_t}
+\end{equation}
+Taking the natural logarithm:
+\begin{equation}
+    2\alpha = \ln \left( \frac{1 - \varepsilon_t}{\varepsilon_t} \right) \implies \alpha_t = \frac{1}{2} \ln \left( \frac{1 - \varepsilon_t}{\varepsilon_t} \right) \quad \blacksquare
+\end{equation}
+
+\emph{Properties of $\alpha_t$:}
+\begin{itemize}
+    \item If $\varepsilon_t < 0.5$ (weak learner performs better than chance), then $\frac{1-\varepsilon_t}{\varepsilon_t} > 1 \implies \alpha_t > 0$.
+    \item As $\varepsilon_t \to 0$ (perfect learner), $\alpha_t \to +\infty$.
+    \item If $\varepsilon_t = 0.5$ (random guess), $\alpha_t = 0$ (assigned zero voting power).
+\end{itemize}
+
+Substituting $\alpha_t$ back into $Z(\alpha)$ yields the minimal normalization factor:
+\begin{align}
+    Z_t &= (1 - \varepsilon_t) \sqrt{\frac{\varepsilon_t}{1 - \varepsilon_t}} + \varepsilon_t \sqrt{\frac{1 - \varepsilon_t}{\varepsilon_t}} \nonumber \\
+    &= \sqrt{\varepsilon_t (1 - \varepsilon_t)} + \sqrt{\varepsilon_t (1 - \varepsilon_t)} = 2\sqrt{\varepsilon_t (1 - \varepsilon_t)}
+\end{align}
+
+\paragraph{Proof: Exponential Convergence of Training Error:}
+We now formally prove that AdaBoost drives empirical training classification error to zero exponentially fast.
+
+\textbf{Theorem 3 (AdaBoost Training Error Bound).} \emph{The training classification error of the final strong classifier $H(x)$ is upper-bounded by the product of the step-wise normalization factors:}
+\begin{equation}
+    \frac{1}{N} \sum_{i=1}^N \mathbb{I}[H(x_i) \ne y_i] \le \prod_{t=1}^M Z_t
+\end{equation}
+
+\emph{Proof.} Consider the 0-1 classification loss. If $H(x_i) \ne y_i$, then $y_i \sum_{t=1}^M \alpha_t h_t(x_i) \le 0$, which implies:
+\begin{equation}
+    \mathbb{I}[H(x_i) \ne y_i] \le \exp\left( -y_i \sum_{t=1}^M \alpha_t h_t(x_i) \right)
+\end{equation}
+Unrolling the instance weight update definition:
+\begin{equation}
+    w_i^{(M+1)} = \frac{w_i^{(1)} \prod_{t=1}^M \exp(-\alpha_t y_i h_t(x_i))}{\prod_{t=1}^M Z_t} = \frac{\frac{1}{N} \exp\left( -y_i \sum_{t=1}^M \alpha_t h_t(x_i) \right)}{\prod_{t=1}^M Z_t}
+\end{equation}
+Summing over all $N$ instances and noting that $\sum_{i=1}^N w_i^{(M+1)} = 1$:
+\begin{equation}
+    1 = \frac{1}{N \prod_{t=1}^M Z_t} \sum_{i=1}^N \exp\left( -y_i \sum_{t=1}^M \alpha_t h_t(x_i) \right)
+\end{equation}
+Rearranging:
+\begin{equation}
+    \frac{1}{N} \sum_{i=1}^N \mathbb{I}[H(x_i) \ne y_i] \le \frac{1}{N} \sum_{i=1}^N \exp\left( -y_i \sum_{t=1}^M \alpha_t h_t(x_i) \right) = \prod_{t=1}^M Z_t \quad \blacksquare
+\end{equation}
+
+\textbf{Corollary (Exponential Decay in Terms of Edge $\gamma_t$).}
+Parameterize the error by its edge over random chance: $\varepsilon_t = \frac{1}{2} - \gamma_t$. The normalization factor simplifies to:
+\begin{equation}
+    Z_t = 2\sqrt{\left(\frac{1}{2} - \gamma_t\right)\left(\frac{1}{2} + \gamma_t\right)} = 2\sqrt{\frac{1}{4} - \gamma_t^2} = \sqrt{1 - 4\gamma_t^2}
+\end{equation}
+Using the analytic inequality $1 - u \le e^{-u}$ for all $u \in \R$ (with $u = 4\gamma_t^2$):
+\begin{equation}
+    Z_t \le \sqrt{e^{-4\gamma_t^2}} = e^{-2\gamma_t^2}
+\end{equation}
+Substituting this bound into Theorem 3:
+\begin{equation}
+    \frac{1}{N}\sum_{i=1}^N \mathbb{I}[H(x_i) \ne y_i] \le \prod_{t=1}^M e^{-2\gamma_t^2} = \exp\left( -2 \sum_{t=1}^M \gamma_t^2 \right)
+\end{equation}
+If every weak learner maintains an edge bounded below by $\gamma_t \ge \gamma > 0$:
+\begin{equation}
+    \text{Empirical Training Error} \le \exp\left( -2M\gamma^2 \right)
+\end{equation}
+
+\emph{Numerical Convergence Rates:} Table~\ref{tab:adaboost_convergence} illustrates the rapid exponential collapse of training error bound for weak learners with edge $\gamma = 0.10$ ($\varepsilon = 0.40$, only $10\%$ better than random guessing).
+
+\begin{table}[!htbp]
+\centering
+\small
+\begin{tabular}{@{}ccc@{}}
+\toprule
+\textbf{Boosting Rounds ($M$)} & \textbf{Exponential Upper Bound ($\exp(-2M\gamma^2)$)} & \textbf{Max Training Error} \\ \midrule
+$10$                           & $\exp(-2 \cdot 10 \cdot 0.01) = \exp(-0.20)$           & $\le 81.87\%$               \\
+$50$                           & $\exp(-2 \cdot 50 \cdot 0.01) = \exp(-1.00)$           & $\le 36.79\%$               \\
+$100$                          & $\exp(-2 \cdot 100 \cdot 0.01) = \exp(-2.00)$          & $\le 13.53\%$               \\
+$200$                          & $\exp(-2 \cdot 200 \cdot 0.01) = \exp(-4.00)$          & $\le 1.83\%$                \\
+$300$                          & $\exp(-2 \cdot 300 \cdot 0.01) = \exp(-6.00)$          & $\le 0.25\%$                \\ \bottomrule
+\end{tabular}
+\caption{Exponential decay of AdaBoost training error bound with weak learner edge $\gamma = 0.10$.}
+\label{tab:adaboost_convergence}
+\end{table}
+
+This rigorous result proves why weak learners are sufficient: as long as each tree is slightly better than chance ($\gamma > 0$), training error converges exponentially toward zero.
+
+\subsection{The Achilles' Heel: Exponential Loss and Outlier Vulnerability}
+\label{sec:outlier_vulnerability}
+Despite its brilliant theoretical guarantee, AdaBoost suffers from a fatal vulnerability on real-world tabular data: \textbf{extreme sensitivity to noise and label contamination}.
+
+\paragraph{Mathematical Origin of the Vulnerability:}
+AdaBoost strictly minimizes the exponential loss:
+\begin{equation}
+    l_{\text{exp}}(y, f(x)) = e^{-y f(x)}
+\end{equation}
+Consider an outlier or a mislabeled sample (e.g., $y_i = +1$ where the true underlying feature distribution dictates $-1$). As the ensemble $f(x)$ correctly learns the general trend, the margin for this outlier becomes strongly negative: $y_i f(x_i) \ll 0$.
+
+Because the exponential loss grows exponentially with negative margin:
+\begin{equation}
+    \lim_{y f(x) \to -\infty} \frac{\partial l_{\text{exp}}}{\partial f(x)} = \lim_{y f(x) \to -\infty} -y e^{-y f(x)} = \infty
+\end{equation}
+The instance weight update rule assigns this outlier an exponentially explosive weight:
+\begin{equation}
+    w_i^{(t+1)} \propto w_i^{(t)} \exp(+\alpha_t)
+\end{equation}
+Within a few iterations, a handful of noisy outliers monopolize over $99\%$ of the total sample weight. Subsequent weak learners are forced to abandon learning generalizable patterns across the rest of the dataset just to fit these distorted anomalies, causing catastrophic overfitting.
+
+Furthermore, AdaBoost's formulation is restricted to exponential loss and binary classification; it cannot natively accommodate general loss functions (such as Huber loss, Poisson loss, or ranking metrics). This fundamental limitation motivated Jerome Friedman to reinvent boosting through the lens of continuous mathematical optimization.
+
+\subsection{Friedman's Functional Gradient Descent (2001)}
+\label{sec:friedman_gbdt}
+
+\paragraph{Connecting AdaBoost and Residual Fitting to General Losses:}
+In Section~\ref{sec:boosting_residuals}, we observed that under the standard squared error loss $l(y, \hat{y}) = \frac{1}{2}(y - \hat{y})^2$, the negative derivative with respect to the model's prediction directly recovers the classical arithmetic residual:
+\begin{equation}
+    -\frac{\partial l(y_i, \hat{y}_i)}{\partial \hat{y}_i} = y_i - \hat{y}_i = r_i
+\end{equation}
+Subsequently, in Section~\ref{sec:adaboost}, we demonstrated that AdaBoost implicitly minimizes the exponential loss $l_{\text{exp}}(y, f(x)) = e^{-y f(x)}$ by systematically updating sample weights $\mathbf{w}^{(t)}$. However, as proved in Section~\ref{sec:outlier_vulnerability}, exponential loss is disastrously brittle in the presence of label noise and heavy-tailed outliers.
+
+This raised a profound foundational question in statistical learning theory: \emph{Can the boosting paradigm be generalized to arbitrary, differentiable convex loss functions---such as Huber loss for robust regression, Bernoulli log-loss for probabilistic classification, or Poisson deviance for count data?}
+
+Jerome Friedman (2001) answered this affirmatively by making a monumental paradigm shift: \textbf{Boosting is not merely a data-reweighting heuristic; it is numerical Gradient Descent executed directly in an infinite-dimensional Function Space}.
+
+\paragraph{From Parameter Space to Function Space Optimization:}
+In classical parametric machine learning, a model $f(x; \boldsymbol{\theta})$ is parameterized by a finite-dimensional weight vector $\boldsymbol{\theta} \in \R^d$ (e.g., linear regression coefficients or neural network weights). To minimize empirical risk $\mathcal{L}(\boldsymbol{\theta}) = \sum_{i=1}^N l(y_i, f(x_i; \boldsymbol{\theta}))$, standard gradient descent updates the parameter vector iteratively:
+\begin{equation}
+    \boldsymbol{\theta}^{(t)} = \boldsymbol{\theta}^{(t-1)} - \eta \nabla_{\boldsymbol{\theta}} \mathcal{L}(\boldsymbol{\theta}^{(t-1)})
+\end{equation}
+In nonparametric ensemble learning, however, we do not parameterize the ensemble function $F(x)$ directly. Instead, we treat the function $F \in \mathcal{F}$ itself as the mathematical variable to be optimized, where $\mathcal{F}$ is a function space (specifically, an inner-product Hilbert space $\mathcal{L}_2$).
+
+Consider evaluating the ensemble function $F$ at the $N$ discrete training points $\{x_1, \dots, x_N\}$. In this context, $F$ can be conceptualized as an $N$-dimensional vector in $\R^N$:
+\begin{equation}
+    \mathbf{F} = \big[ F(x_1), F(x_2), \dots, F(x_N) \big]^\top \in \R^N
+\end{equation}
+The empirical risk evaluated on the training set is a scalar function of this $N$-dimensional vector:
+\begin{equation}
+    \mathcal{L}(\mathbf{F}) = \sum_{i=1}^N l\big(y_i, F(x_i)\big)
+\end{equation}
+If we were performing unconstrained numerical optimization in $\R^N$, the direction of steepest descent at the current ensemble state $\mathbf{F}^{(t-1)}$ would be given by the unconstrained negative gradient vector:
+\begin{equation}
+    -\nabla_{\mathbf{F}} \mathcal{L}(\mathbf{F}^{(t-1)}) = - \left[ \frac{\partial l(y_1, F(x_1))}{\partial F(x_1)}, \dots, \frac{\partial l(y_N, F(x_N))}{\partial F(x_N)} \right]^\top_{\mathbf{F} = \mathbf{F}^{(t-1)}}
+\end{equation}
+Friedman defined the $i$-th component of this negative gradient vector as the \textbf{Pseudo-Residual} (or generalized residual) for sample $i$ at iteration $t$:
+\begin{equation}
+    r_{it} = -\left[ \frac{\partial l(y_i, \hat{y}_i)}{\partial \hat{y}_i} \right]_{\hat{y}_i = F_{t-1}(x_i)}
+\end{equation}
+
+\paragraph{The Projection Problem: Mapping Gradients into Hypothesis Class $\mathcal{H}$:}
+In pure discrete optimization, one could simply update the training points via a direct step: $F(x_i) \leftarrow F(x_i) + \eta r_{it}$. However, such a point-wise lookup-table update possesses zero inductive bias: it does not define predictions for unseen test instances $x^* \notin \{x_1, \dots, x_N\}$ and yields no generalization capability.
+
+To generalize across the continuous feature manifold $\mathcal{X}$, the update direction must be constrained to belong to a parameterized hypothesis family of base learners $\mathcal{H}$---specifically, the class of CART regression trees with $J$ terminal leaves.
+
+Consequently, we must find a tree hypothesis $h_t(x) \in \mathcal{H}$ that is \textbf{closest in direction} to the unconstrained gradient vector $\mathbf{r}_t = [r_{1t}, \dots, r_{Nt}]^\top$. In the Hilbert space endowed with the empirical inner product $\langle u, v \rangle = \frac{1}{N}\sum_{i=1}^N u_i v_i$, the optimal projection under the induced Euclidean norm is:
+\begin{equation}
+    h_t = \argmin_{h \in \mathcal{H}} \|\mathbf{r}_t - h\|_2^2 = \argmin_{h \in \mathcal{H}} \sum_{i=1}^N \big(r_{it} - h(x_i)\big)^2
+\end{equation}
+\calloutbox{\textbf{Profound First-Principles Insight:} Fitting a standard CART regression tree to the pseudo-residuals $r_{it}$ using ordinary least squares (Sum of Squared Errors) is mathematically identical to performing an orthogonal projection of the infinite-dimensional negative gradient onto the subspace of tree hypotheses!}
+
+\paragraph{Two-Stage Optimization and Leaf Line Search:}
+Fitting the regression tree $h_t(x)$ via least squares establishes the \textbf{tree topology}---namely, the partition of the feature space into $J$ disjoint terminal regions $\{R_{jt}\}_{j=1}^J$. 
+
+However, Friedman recognized a critical subtlety: while least squares identifies the optimal geometric partitions $R_{jt}$ for fitting the gradient, the sample mean of pseudo-residuals within each leaf does not necessarily minimize the \emph{original} arbitrary loss function $l(y, F)$.
+
+To overcome this, Friedman decoupled tree construction into a \textbf{two-stage optimization process}:
+\begin{enumerate}
+    \item \textbf{Stage 1 (Topology Selection):} Grow a $J$-terminal node regression tree using greedy recursive splitting (Section~\ref{sec:greedy_splitting}) on the pseudo-residuals $\{r_{it}\}_{i=1}^N$ using squared error loss, producing disjoint leaf regions $\{R_{1t}, R_{2t}, \dots, R_{Jt}\}$.
+    \item \textbf{Stage 2 (Leaf Value Optimization via Line Search):} Holding the spatial structure of the leaves $\{R_{jt}\}$ strictly fixed, compute the optimal scalar update $\gamma_{jt}$ for each individual leaf $j$ by solving a 1D numerical optimization problem directly on the true loss function:
+    \begin{equation}
+        \gamma_{jt} = \argmin_{\gamma} \sum_{x_i \in R_{jt}} l\big(y_i, F_{t-1}(x_i) + \gamma\big)
+    \end{equation}
+\end{enumerate}
+Once the optimal leaf values $\{\gamma_{jt}\}_{j=1}^J$ are obtained, the ensemble is updated with learning rate (shrinkage) $\eta \in (0, 1]$:
+\begin{equation}
+    F_t(x) = F_{t-1}(x) + \eta \sum_{j=1}^J \gamma_{jt} \cdot \mathbb{I}(x \in R_{jt})
+\end{equation}
+
+\paragraph{Algorithmic Formalization (Friedman's GBDT):}
+The complete generic Gradient Boosted Decision Tree algorithm is structured as follows:
+\begin{enumerate}
+    \item \textbf{Initialization:} Initialize the ensemble with a constant optimal value:
+    \begin{equation}
+        F_0(x) = \argmin_{\gamma} \sum_{i=1}^N l(y_i, \gamma)
+    \end{equation}
+    \item \textbf{Boosting Iterations:} For iteration $t = 1, \dots, M$:
+    \begin{enumerate}
+        \item Compute the pseudo-residuals for all $i \in \{1, \dots, N\}$:
+        \begin{equation}
+            r_{it} = -\left[ \frac{\partial l(y_i, \hat{y}_i)}{\partial \hat{y}_i} \right]_{\hat{y}_i = F_{t-1}(x_i)}
+        \end{equation}
+        \item Fit a CART regression tree to targets $r_{it}$, creating terminal leaf regions $R_{jt}$ for $j = 1, \dots, J$.
+        \item For each leaf $j \in \{1, \dots, J\}$, compute optimal multiplier $\gamma_{jt}$ via line search:
+        \begin{equation}
+            \gamma_{jt} = \argmin_{\gamma} \sum_{x_i \in R_{jt}} l\big(y_i, F_{t-1}(x_i) + \gamma\big)
+        \end{equation}
+        \item Update the ensemble model:
+        \begin{equation}
+            F_t(x) = F_{t-1}(x) + \eta \sum_{j=1}^J \gamma_{jt} \cdot \mathbb{I}(x \in R_{jt})
+        \end{equation}
+    \end{enumerate}
+    \item \textbf{Output:} Return the final additive model $F_M(x)$.
+\end{enumerate}
+
+\paragraph{Concrete Case Study: Binary Classification under Bernoulli Log-Loss:}
+To illustrate Friedman's formulation on a non-trivial loss, consider binary classification where $y_i \in \{0, 1\}$. The model outputs log-odds (logits) $\hat{y}_i = F(x_i) \in \R$. The predicted probability is obtained via the logistic sigmoid link function:
+\begin{equation}
+    p_i = \sigma(F(x_i)) = \frac{1}{1 + e^{-F(x_i)}}
+\end{equation}
+The negative log-likelihood (binary cross-entropy loss) is:
+\begin{align}
+    l(y_i, F(x_i)) &= -y_i \ln p_i - (1 - y_i) \ln(1 - p_i) \nonumber \\
+    &= -y_i F(x_i) + \ln\big(1 + e^{F(x_i)}\big)
+\end{align}
+Taking the derivative with respect to $F(x_i)$:
+\begin{equation}
+    \frac{\partial l(y_i, F(x_i))}{\partial F(x_i)} = -y_i + \frac{e^{F(x_i)}}{1 + e^{F(x_i)}} = p_i - y_i
+\end{equation}
+Thus, the pseudo-residual at iteration $t$ is:
+\begin{equation}
+    r_{it} = -\frac{\partial l(y_i, F(x_i))}{\partial F(x_i)} = y_i - p_i^{(t-1)}
+\end{equation}
+Notice the mathematical elegance: \emph{the pseudo-residual is exactly the prediction error in probability space}---the gap between actual truth ($0$ or $1$) and current probability $p_i^{(t-1)} \in (0, 1)$.
+
+In Stage 2, the optimal leaf value line search requires:
+\begin{equation}
+    \gamma_{jt} = \argmin_\gamma \sum_{x_i \in R_{jt}} \Big[ -y_i \big(F_{t-1}(x_i) + \gamma\big) + \ln\big(1 + e^{F_{t-1}(x_i) + \gamma}\big) \Big]
+\end{equation}
+Because this 1D convex sum has no closed-form analytical minimum in general, Friedman approximated $\gamma_{jt}$ by performing a single \textbf{Newton-Raphson step} around $\gamma = 0$:
+\begin{equation}
+    \gamma_{jt} \approx -\frac{g(\gamma = 0)}{h(\gamma = 0)} = \frac{\sum_{i \in I_{jt}} (y_i - p_i^{(t-1)})}{\sum_{i \in I_{jt}} p_i^{(t-1)}(1 - p_i^{(t-1)})}
+\end{equation}
+This closed-form approximation reveals an early glimpse of 2nd-order optimization. However, in Friedman's algorithm, this Newton step was applied strictly as a \emph{post-hoc fix} to the leaf values \emph{after} the tree structure had already been determined using unweighted least squares.
+
+\subsection{Limitations of Friedman's 1st-Order Formulation}
+\label{sec:friedman_limitations}
+
+While Friedman's functional gradient descent represented a quantum leap over AdaBoost, practical implementations revealed four profound mathematical and architectural limitations.
+
+\paragraph{1. Curvature Blindness (First-Order Gradient Myopia):}
+Standard gradient descent implicitly assumes that the loss landscape is locally isotropic---i.e., that the loss surface contours are concentric hyperspheres. Under this assumption, the negative gradient points directly toward the local minimum.
+
+However, complex objective functions (such as binary log-loss, multivariable softmax, or ranking losses) exhibit highly anisotropic, non-uniform \textbf{curvature}, quantified by the second derivative (Hessian matrix):
+\begin{equation}
+    h_i = \frac{\partial^2 l(y_i, \hat{y}_i)}{\partial \hat{y}_i^2}
+\end{equation}
+For binary log-loss, $h_i = p_i(1 - p_i)$. Consider two instances:
+\begin{itemize}
+    \item Sample $A$ is highly uncertain: $p_A = 0.50 \implies h_A = 0.50 \times 0.50 = 0.250$.
+    \item Sample $B$ is already predicted with high confidence: $p_B = 0.99 \implies h_B = 0.99 \times 0.01 = 0.0099$.
+\end{itemize}
+The curvature for sample $A$ is more than \textbf{25 times larger} than that of sample $B$! In regions of steep curvature, a first-order step overshoots violently; in flat plateaus, it crawls imperceptibly slowly. By ignoring the second derivative $h_i$ during tree construction, Friedman's GBDT is fundamentally blind to the underlying geometry of the loss surface.
+
+\paragraph{2. The Structural Decoupling Dilemma (Split-Criterion Mismatch):}
+This represents the most severe conceptual flaw in classical GBDT:
+\begin{center}
+    \emph{The criterion used to construct the tree topology does not match the criterion used to evaluate the leaf values.}
+\end{center}
+Specifically:
+\begin{itemize}
+    \item \textbf{In Stage 1 (Tree Splitting):} The split points $(k, v)$ are selected to maximize variance reduction under the Sum of Squared Errors (SSE) on the pseudo-residuals:
+    \begin{equation}
+        \Delta \text{SSE}(k,v) = \underbrace{\sum_{i \in I_P} (r_i - \bar{r}_P)^2}_{\text{parent SSE}} - \left[ \sum_{i \in I_L} (r_i - \bar{r}_L)^2 + \sum_{i \in I_R} (r_i - \bar{r}_R)^2 \right].
+    \end{equation}
+    Equivalently, the tree minimizes the total child SSE. Doing so on $r_i$ implicitly assumes that the loss function is quadratic with constant unit curvature: $h_i \equiv 1$ for all $i \in \{1, \dots, N\}$.
+    \item \textbf{In Stage 2 (Leaf Valuation):} The tree topology $\{R_{jt}\}$ is permanently frozen, and leaf values are calculated using the true non-linear loss $l$.
+\end{itemize}
+This mismatch causes severe pathology: a candidate split that dramatically reduces SSE on $r_i$ may actually \emph{increase} or fail to reduce the true loss $l$, because it allocates high split priority to outlier samples with large gradients $r_i$ but negligible Hessian weights $h_i$. The tree structure is grown under a false objective.
+
+\paragraph{3. Computational Bottleneck of Per-Leaf Line Searches:}
+For loss functions where the 1D line search cannot be approximated with a simple analytic formula (e.g., Huber loss, Quantile loss, Fair loss, or LambdaMART ranking), solving an iterative numerical line search (e.g., golden-section search or Brent's method) across $J$ leaves for every single tree becomes an extreme computational bottleneck. This prevents efficient parallelization and vectorization on modern hardware.
+
+\paragraph{4. Absence of Integrated Regularization in Split Scoring:}
+In classical CART and Friedman's GBDT, split finding is entirely unregularized: any split that yields an infinitesimal reduction in pseudo-residual SSE is accepted. Regularization is enforced purely through ad-hoc, post-hoc heuristics:
+\begin{itemize}
+    \item Hard depth limits ($\text{max\_depth} \le 6$);
+    \item Minimum sample thresholds ($\text{min\_samples\_leaf}$);
+    \item Global shrinkage factors ($\eta \le 0.1$).
+\end{itemize}
+Crucially, the split evaluation function possesses \textbf{no intrinsic mechanism to penalize leaf count or weight magnitudes}. A split creating two complex, unstable leaves with enormous weights is evaluated identically to a split creating two compact, regularized leaves.
+
+\paragraph{The Imperative for a Second-Order Revolution:}
+These four fundamental limitations---curvature blindness, structural decoupling, line search overhead, and unregularized splitting---created an urgent theoretical need for a unified framework. 
+
+In 2016, Tianqi Chen and Carlos Guestrin solved all four dilemmas simultaneously by formulating \textbf{XGBoost}: an elegant paradigm that applies a \textbf{2nd-Order Taylor Expansion directly to the regularized objective function}, fusing split finding and leaf weight optimization into an exact, curvature-aware, closed-form analytic framework.
+
+% ==============================================================================
+\section{The 2nd-Order Taylor Optimization Revolution (XGBoost)}
+\label{sec:xgboost}
+% ==============================================================================
+
+\subsection{Conceptual Origins: The Newton-Raphson Intuition in Function Space}
+
+\paragraph{Connecting with the Limitations of Friedman's GBDT:}
+In Section~\ref{sec:friedman_limitations}, we identified the four structural crises of Friedman's first-order GBDT:
+\begin{enumerate}
+    \item \emph{Curvature Blindness:} Gradient descent assumes isotropic loss contours, ignoring the variation of second-order curvature $h_i = \nabla^2 l$ across samples.
+    \item \emph{Structural Decoupling:} Splitting decisions are determined using least squares on pseudo-residuals (implicitly assuming $h_i \equiv 1$), while leaf values are computed post-hoc via line search on the true loss $l$.
+    \item \emph{Line Search Bottleneck:} Numerically solving 1D optimization problems on each leaf for general losses is computationally prohibitive.
+    \item \emph{Unregularized Splitting:} Split metrics fail to penalize tree depth or leaf weights, relying entirely on ad-hoc heuristics.
+\end{enumerate}
+
+To overcome these deficiencies, Tianqi Chen and Carlos Guestrin (2016) proposed a foundational reformulation: \textbf{bring second-order curvature directly into the tree-growing objective function via Taylor's theorem}.
+
+\paragraph{The Newton-Raphson Intuition:}
+In classical numerical analysis, finding the minimum of a scalar function $f(\theta)$ via first-order Gradient Descent takes steps proportional to $-f'(\theta)$:
+\begin{equation}
+    \theta^{(t+1)} = \theta^{(t)} - \eta f'(\theta^{(t)})
+\end{equation}
+In anisotropic landscapes (such as elongated, narrow valleys), Gradient Descent oscillates violently between the steep walls while making agonizingly slow progress along the valley floor.
+
+The \textbf{Newton-Raphson method} resolves this by approximating the local function landscape with an osculating quadratic parabola:
+\begin{equation}
+    f(\theta + \Delta \theta) \approx f(\theta) + f'(\theta)\Delta \theta + \frac{1}{2} f''(\theta) (\Delta \theta)^2
+\end{equation}
+Differentiating with respect to $\Delta \theta$ and setting to zero yields the celebrated Newton step:
+\begin{equation}
+    \Delta \theta^* = -\frac{f'(\theta)}{f''(\theta)}
+\end{equation}
+The Newton-Raphson step automatically scales the update inversely by the local curvature $f''(\theta)$:
+\begin{itemize}
+    \item Where the surface is steep and narrow ($f''(\theta)$ is large), the algorithm takes cautious, small steps to prevent overshooting.
+    \item Where the surface is flat ($f''(\theta)$ is small), the algorithm takes aggressive, large strides to traverse the plateau rapidly.
+\end{itemize}
+
+\paragraph{Why 2nd-Order? Why Not 1st or 3rd?}
+A crucial design question arises: \emph{Why truncate the Taylor series at exactly the second order?}
+\begin{itemize}
+    \item \textbf{1st-Order (Linear):} A linear approximation $f(\theta) + g\Delta \theta$ is unbounded below. It possesses no local minimum and provides no information about step scale, forcing algorithms to rely on arbitrary step sizes $\eta$ and decoupled line searches.
+    \item \textbf{2nd-Order (Quadratic):} A convex quadratic function $g \Delta \theta + \frac{1}{2}h (\Delta \theta)^2$ (with $h > 0$) possesses a \textbf{unique, closed-form global minimum} computable instantaneously via a single division: $\Delta \theta^* = -g/h$. It requires zero iterative solver loops, enabling ultra-fast execution in $\mathcal{O}(1)$ time.
+    \item \textbf{3rd-Order and Higher (Polynomial):} A cubic approximation is unbounded below (since $(\Delta \theta)^3 \to -\infty$ as $\Delta \theta \to -\infty$), meaning it possesses no global minimum. A quartic (4th-order) polynomial requires finding the roots of a cubic derivative via Cardano's formula or running iterative numerical root-finders for every candidate split of every node, completely destroying algorithmic throughput.
+\end{itemize}
+Therefore, the \textbf{2nd-Order Taylor expansion represents the practical sweet spot} in optimization theory: it is the highest order that yields an exact, globally optimal, closed-form minimizer of the quadratic surrogate via a single division, without numerical iteration.
+
+\subsection{The Regularized Objective Function}
+
+Let $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^N$ be the training dataset. At boosting iteration $t$, let $\hat{y}_i^{(t-1)}$ denote the cumulative prediction for sample $i$ generated by the ensemble of the preceding $t-1$ trees:
+\begin{equation}
+    \hat{y}_i^{(t-1)} = \sum_{k=1}^{t-1} \eta f_k(x_i)
+\end{equation}
+We seek a new base tree $f_t \in \mathcal{F}$ that minimizes the penalized objective function:
+\begin{equation}
+    \mathcal{L}^{(t)} = \sum_{i=1}^N l\left(y_i, \hat{y}_i^{(t-1)} + f_t(x_i)\right) + \Omega(f_t)
+\end{equation}
+
+\paragraph{Dissection of the Structural Regularizer $\Omega(f_t)$:}
+The regularization penalty $\Omega(f_t)$ explicitly controls model complexity:
+\begin{equation}
+    \Omega(f_t) = \gamma T + \frac{1}{2} \lambda \sum_{j=1}^T w_j^2
+\end{equation}
+where $T$ is the number of terminal leaf nodes in tree $f_t$, $\mathbf{w} = [w_1, \dots, w_T]^\top \in \R^T$ is the vector of leaf output weights, and $\gamma, \lambda \ge 0$ are user-specified hyper-parameters:
+\begin{enumerate}
+    \item \textbf{Leaf Complexity Penalty ($\gamma T$):} Grounded in the Minimum Description Length (MDL) principle and Occam's Razor. Every additional leaf node partitions the feature space further, consuming degrees of freedom and increasing model variance. The parameter $\gamma$ acts as a structural penalty threshold: a split is justified if and only if the empirical loss reduction exceeds $\gamma$.
+    \item \textbf{Ridge $L_2$ Leaf Shrinkage ($\frac{1}{2}\lambda \sum w_j^2$):} Analogous to Ridge regression. Penalizing the squared Euclidean norm of leaf weights shrinks leaf responses toward zero, preventing individual leaves from producing extreme, high-variance predictions on sparse sub-populations. 
+    
+    From an algebraic perspective, $\lambda$ plays the role of a \textbf{Tikhonov regularization damping factor}: it guarantees that the denominator in the optimal leaf weight formula $(H_j + \lambda)$ remains strictly positive and bounded away from zero, preventing numerical instability when $H_j \to 0$.
+\end{enumerate}
+
+\subsection{2nd-Order Taylor Approximation and Constant Elimination}
+
+Consider the loss term for sample $i$: $l(y_i, \hat{y}_i^{(t-1)} + f_t(x_i))$. Treating the current prediction $\hat{y}_i^{(t-1)}$ as the expansion center and the tree output $f_t(x_i)$ as the local step displacement, Taylor's theorem yields:
+\begin{equation}
+    l\left(y_i, \hat{y}_i^{(t-1)} + f_t(x_i)\right) \approx l\left(y_i, \hat{y}_i^{(t-1)}\right) + g_i f_t(x_i) + \frac{1}{2} h_i f_t^2(x_i)
+\end{equation}
+where $g_i$ and $h_i$ are the first and second partial derivatives of the loss with respect to the prediction, evaluated at the current ensemble state:
+\begin{equation}
+    g_i = \left. \frac{\partial l(y_i, \hat{y})}{\partial \hat{y}} \right|_{\hat{y} = \hat{y}_i^{(t-1)}}, \quad h_i = \left. \frac{\partial^2 l(y_i, \hat{y})}{\partial \hat{y}^2} \right|_{\hat{y} = \hat{y}_i^{(t-1)}}
+\end{equation}
+
+Substituting this quadratic approximation into the objective function:
+\begin{equation}
+    \mathcal{L}^{(t)} \approx \sum_{i=1}^N \left[ l\left(y_i, \hat{y}_i^{(t-1)}\right) + g_i f_t(x_i) + \frac{1}{2} h_i f_t^2(x_i) \right] + \gamma T + \frac{1}{2}\lambda \sum_{j=1}^T w_j^2
+\end{equation}
+
+\paragraph{Elimination of Invariant Constants:}
+Notice that the term $\sum_{i=1}^N l(y_i, \hat{y}_i^{(t-1)})$ depends solely on historical predictions and contains no dependence on the candidate tree $f_t(x)$. In any optimization problem $\argmin_f \mathcal{L}(f)$, adding or subtracting a constant scalar does not alter the location of the minimizer:
+\begin{equation}
+    \argmin_{f_t} \mathcal{L}^{(t)} \equiv \argmin_{f_t} \left( \mathcal{L}^{(t)} - \sum_{i=1}^N l\left(y_i, \hat{y}_i^{(t-1)}\right) \right)
+\end{equation}
+Dropping this constant term yields the canonical \textbf{surrogate objective function}:
+\begin{equation}
+    \tilde{\mathcal{L}}^{(t)} = \sum_{i=1}^N \left[ g_i f_t(x_i) + \frac{1}{2} h_i f_t^2(x_i) \right] + \gamma T + \frac{1}{2}\lambda \sum_{j=1}^T w_j^2
+\end{equation}
+
+\subsection{Leaf Regrouping: From \texorpdfstring{$N$}{N} Instances to \texorpdfstring{$T$}{T} Independent Subproblems}
+
+Recall from Section~\ref{sec:tree_geometry} that any decision tree with $T$ leaves defines a spatial mapping $q: \R^K \to \{1, \dots, T\}$ such that:
+\begin{equation}
+    f_t(x) = w_{q(x)} = \sum_{j=1}^T w_j \cdot \mathbb{I}(x \in R_j)
+\end{equation}
+Let $I_j$ denote the index set of training instances mapped into leaf $j$:
+\begin{equation}
+    I_j = \{i \in \{1, \dots, N\} \mid q(x_i) = j\}
+\end{equation}
+Because the leaf regions $\{R_j\}_{j=1}^T$ form a strict disjoint partition of the instance space ($\bigcup_{j=1}^T I_j = \{1, \dots, N\}$ and $I_j \cap I_k = \emptyset$ for $j \ne k$), the summation over all $N$ training instances can be formally decomposed into a nested summation over leaves:
+\begin{equation}
+    \sum_{i=1}^N [ \dots ] = \sum_{j=1}^T \sum_{i \in I_j} [ \dots ]
+\end{equation}
+For any sample $i \in I_j$, the tree prediction is identically the leaf weight: $f_t(x_i) = w_j$. Substituting $w_j$ for $f_t(x_i)$:
+\begin{align}
+    \tilde{\mathcal{L}}^{(t)} &= \sum_{j=1}^T \sum_{i \in I_j} \left[ g_i w_j + \frac{1}{2} h_i w_j^2 \right] + \gamma T + \frac{1}{2}\lambda \sum_{j=1}^T w_j^2 \nonumber \\
+    &= \sum_{j=1}^T \left[ \left(\sum_{i \in I_j} g_i\right) w_j + \frac{1}{2}\left(\sum_{i \in I_j} h_i + \lambda\right) w_j^2 \right] + \gamma T
+\end{align}
+
+\paragraph{Aggregation Statistics:}
+Define the cumulative leaf gradient sum $G_j$ and cumulative leaf Hessian sum $H_j$:
+\begin{equation}
+    G_j \triangleq \sum_{i \in I_j} g_i, \quad H_j \triangleq \sum_{i \in I_j} h_i
+\end{equation}
+The surrogate objective compresses into the remarkably compact form:
+\begin{equation}
+    \tilde{\mathcal{L}}^{(t)} = \sum_{j=1}^T \left[ G_j w_j + \frac{1}{2}(H_j + \lambda) w_j^2 \right] + \gamma T
+    \label{eq:xgboost_decoupled_obj}
+\end{equation}
+\calloutbox{\textbf{Profound First-Principles Insight:} Equation~\eqref{eq:xgboost_decoupled_obj} reveals that for any fixed tree topology $q(x)$, the joint optimization problem over $N$ interrelated samples \textbf{decouples into $T$ completely independent, one-dimensional quadratic optimization subproblems} over each leaf weight $w_j$.}
+
+\subsection{Proof: Analytical Derivation of Optimal Leaf Weight \texorpdfstring{$w_j^*$}{w*}}
+
+We now formally derive the optimal leaf weight for a fixed tree structure $q(x)$.
+
+\textbf{Theorem 4 (Optimal Leaf Weight).} \emph{For a fixed tree topology $q(x)$ with leaf sample sets $I_j$, assuming loss convexity ($h_i \ge 0$) and strictly positive regularization $\lambda > 0$, the unique global minimizer for leaf weight $w_j$ is given by:}
+\begin{equation}
+    w_j^* = -\frac{G_j}{H_j + \lambda} = -\frac{\sum_{i \in I_j} g_i}{\sum_{i \in I_j} h_i + \lambda}
+\end{equation}
+
+\emph{Proof.} For any individual leaf $j \in \{1, \dots, T\}$, isolate its objective contribution:
+\begin{equation}
+    \phi_j(w_j) = G_j w_j + \frac{1}{2}(H_j + \lambda) w_j^2
+\end{equation}
+To locate the extremum, compute the first derivative with respect to $w_j$ and set it to zero:
+\begin{equation}
+    \frac{d \phi_j(w_j)}{d w_j} = G_j + (H_j + \lambda) w_j = 0
+\end{equation}
+Solving linearly for $w_j$:
+\begin{equation}
+    (H_j + \lambda) w_j = -G_j \implies w_j^* = -\frac{G_j}{H_j + \lambda}
+\end{equation}
+
+To verify that $w_j^*$ is a strict global minimum (rather than a maximum or saddle point), apply the second derivative test:
+\begin{equation}
+    \frac{d^2 \phi_j(w_j)}{d w_j^2} = H_j + \lambda
+\end{equation}
+For any convex loss function $l$, the second partial derivative is non-negative everywhere: $h_i \ge 0$ for all $i$. Therefore:
+\begin{equation}
+    H_j = \sum_{i \in I_j} h_i \ge 0
+\end{equation}
+Since $\lambda > 0$, the second derivative satisfies:
+\begin{equation}
+    \frac{d^2 \phi_j(w_j)}{d w_j^2} = H_j + \lambda \ge \lambda > 0
+\end{equation}
+Because the second derivative is strictly positive everywhere on $\R$, $\phi_j(w_j)$ is strictly convex. Hence, $w_j^*$ is the unique, global minimum. $\blacksquare$
+
+\paragraph{Physical and Algorithmic Interpretation:}
+The optimal leaf formula $w_j^* = -\frac{G_j}{H_j + \lambda}$ is an exact, regularized Newton-Raphson step:
+\begin{itemize}
+    \item $G_j$ represents the \textbf{driving force} (total directional gradient pulling the predictions).
+    \item $H_j$ represents the \textbf{inertial resistance} (total surface curvature).
+    \item $\lambda$ represents the \textbf{damping stabilizer} (preventing explosive steps when $H_j \approx 0$).
+\end{itemize}
+Instances with large second derivatives $h_i$ (uncertain samples near decision boundaries) contribute heavy inertia to $H_j$, naturally shrinking the step size to ensure stability.
+
+\subsection{Optimal Structure Score (Tree Evaluation Metric)}
+
+What is the minimal loss achieved by a given tree structure $q$ when all its leaves are set to their optimal weights $w_j^*$?
+
+Substituting $w_j^* = -\frac{G_j}{H_j + \lambda}$ back into the leaf objective $\phi_j(w_j)$:
+\begin{align}
+    \phi_j(w_j^*) &= G_j \left( -\frac{G_j}{H_j + \lambda} \right) + \frac{1}{2}(H_j + \lambda) \left( -\frac{G_j}{H_j + \lambda} \right)^2 \nonumber \\
+    &= -\frac{G_j^2}{H_j + \lambda} + \frac{1}{2} \frac{(H_j + \lambda) G_j^2}{(H_j + \lambda)^2} \nonumber \\
+    &= -\frac{G_j^2}{H_j + \lambda} + \frac{1}{2} \frac{G_j^2}{H_j + \lambda} = -\frac{1}{2} \frac{G_j^2}{H_j + \lambda}
+\end{align}
+
+Summing across all $T$ leaves and reintroducing the complexity penalty $\gamma T$, we obtain the \textbf{Optimal Structure Score}:
+\begin{equation}
+    \tilde{\mathcal{L}}^*(q) = -\frac{1}{2} \sum_{j=1}^T \frac{G_j^2}{H_j + \lambda} + \gamma T
+    \label{eq:optimal_structure_score}
+\end{equation}
+
+\paragraph{Significance of the Structure Score:}
+Equation~\eqref{eq:optimal_structure_score} provides an analytic metric measuring the mathematical quality of any arbitrary tree topology $q(x)$. 
+\begin{itemize}
+    \item It plays the exact role that Impurity (Gini/Entropy) plays in classical CART (Section~\ref{sec:cart_loss}).
+    \item Unlike heuristic impurity metrics, $\tilde{\mathcal{L}}^*(q)$ is derived \textbf{rigorously from the 2nd-order Taylor expansion of the user's custom regularized loss function}.
+    \item A smaller (more negative) structure score corresponds to a superior tree partition.
+\end{itemize}
+
+\subsection{Derivation of the Split Gain and Automatic Pre-Pruning}
+
+Because the space of all possible tree topologies is combinatorial and NP-hard to explore exhaustively, trees are constructed greedily from root to leaves.
+
+Consider a candidate split that partitions an existing parent node $P$ with instance set $I_P = I_L \cup I_R$ into a Left child $L$ and a Right child $R$.
+
+\paragraph{Derivation of the Gain Formula:}
+Before the split, node $P$ exists as a single terminal leaf. Its contribution to the structure score is:
+\begin{equation}
+    \text{Score}_{\text{parent}} = -\frac{1}{2} \frac{G_P^2}{H_P + \lambda} + \gamma \cdot 1 = -\frac{1}{2} \frac{(G_L + G_R)^2}{H_L + H_R + \lambda} + \gamma
+\end{equation}
+After performing the split, the single parent leaf is replaced by two disjoint children leaves $L$ and $R$. Their combined score contribution is:
+\begin{equation}
+    \text{Score}_{\text{children}} = -\frac{1}{2} \left[ \frac{G_L^2}{H_L + \lambda} + \frac{G_R^2}{H_R + \lambda} \right] + \gamma \cdot 2
+\end{equation}
+The \textbf{Split Gain} is defined as the reduction in the surrogate loss achieved by splitting (i.e., parent score minus children score):
+\begin{align}
+    \Gain &\triangleq \text{Score}_{\text{parent}} - \text{Score}_{\text{children}} \nonumber \\
+    &= \left( -\frac{1}{2} \frac{(G_L + G_R)^2}{H_L + H_R + \lambda} + \gamma \right) - \left( -\frac{1}{2} \left[ \frac{G_L^2}{H_L + \lambda} + \frac{G_R^2}{H_R + \lambda} \right] + 2\gamma \right) \nonumber \\
+    &= \frac{1}{2} \left[ \frac{G_L^2}{H_L + \lambda} + \frac{G_R^2}{H_R + \lambda} - \frac{(G_L + G_R)^2}{H_L + H_R + \lambda} \right] - \gamma
+\end{align}
+
+\paragraph{Deconstructing the Four Gain Components:}
+The split gain formula decomposes into intuitive terms:
+\begin{equation}
+    \Gain = \underbrace{\frac{1}{2} \frac{G_L^2}{H_L + \lambda}}_{\text{Quality of Left Leaf}} + \underbrace{\frac{1}{2} \frac{G_R^2}{H_R + \lambda}}_{\text{Quality of Right Leaf}} - \underbrace{\frac{1}{2} \frac{(G_L + G_R)^2}{H_L + H_R + \lambda}}_{\text{Quality of Unsplit Parent}} - \underbrace{\gamma}_{\text{Leaf Creation Cost}}
+\end{equation}
+
+\paragraph{How This Resolves the Dilemmas of Friedman's GBDT:}
+\begin{enumerate}
+    \item \textbf{Resolution of Structural Decoupling:} The exact same objective used to compute the final leaf weights ($w^* = -G/(H+\lambda)$) is embedded directly inside the split evaluation metric. The split finder prioritizes splits that directly minimize the true regularized loss.
+    \item \textbf{Curvature Awareness:} Every instance is weighted by its second derivative $h_i$. Outlier instances with near-zero Hessian ($h_i \approx 0$) cannot hijack split decisions, as their contribution to the denominator is dampened by $\lambda$.
+    \item \textbf{Automatic Pre-Pruning:} If the maximal gain across all features satisfies $\Gain^* \le 0$, the reduction in empirical loss fails to offset the leaf penalty $\gamma$. The split is \textbf{immediately rejected}, and the node remains an unpartitioned leaf. This eliminates the need for expensive post-hoc tree pruning.
+\end{enumerate}
+
+\subsection{Numerical Walkthrough: Split Evaluation Step-by-Step}
+
+To cement theoretical understanding, consider a parent node containing $N_P = 4$ instances under binary logistic loss ($\lambda = 1.0$, $\gamma = 0.50$):
+
+\begin{table}[!htbp]
+\centering
+\small
+\begin{tabular}{@{}ccccc@{}}
+\toprule
+\textbf{Instance ($i$)} & \textbf{Feature ($x_1$)} & \textbf{Label ($y$)} & \textbf{Gradient ($g_i = p_i - y_i$)} & \textbf{Hessian ($h_i = p_i(1-p_i)$)} \\ \midrule
+1                       & $1.5$                     & $0$                  & $+0.60$                               & $0.24$                                \\
+2                       & $2.2$                     & $0$                  & $+0.80$                               & $0.16$                                \\
+3                       & $4.1$                     & $1$                  & $-0.70$                               & $0.21$                                \\
+4                       & $5.0$                     & $1$                  & $-0.90$                               & $0.09$                                \\ \bottomrule
+\end{tabular}
+\caption{Sample instances evaluating candidate split along feature $x_1$.}
+\label{tab:xgboost_num_walkthrough}
+\end{table}
+
+\paragraph{Step 1: Evaluate Parent Node Statistics:}
+Summing across all 4 parent instances:
+\begin{align*}
+    G_P &= 0.60 + 0.80 - 0.70 - 0.90 = -0.20 \\
+    H_P &= 0.24 + 0.16 + 0.21 + 0.09 = 0.70
+\end{align*}
+The parent structure score component is:
+\begin{equation*}
+    \text{Parent Energy} = \frac{G_P^2}{H_P + \lambda} = \frac{(-0.20)^2}{0.70 + 1.0} = \frac{0.04}{1.70} \approx 0.0235
+\end{equation*}
+
+\paragraph{Step 2: Evaluate Split Candidate $A$ (Threshold $x_1 \le 3.0$):}
+This split places instances $\{1, 2\}$ into Left child and $\{3, 4\}$ into Right child:
+\begin{align*}
+    G_L &= 0.60 + 0.80 = 1.40, \quad &H_L &= 0.24 + 0.16 = 0.40 \\
+    G_R &= -0.70 - 0.90 = -1.60, \quad &H_R &= 0.21 + 0.09 = 0.30
+\end{align*}
+Compute child energy components:
+\begin{align*}
+    \frac{G_L^2}{H_L + \lambda} &= \frac{1.40^2}{0.40 + 1.0} = \frac{1.96}{1.40} = 1.4000 \\
+    \frac{G_R^2}{H_R + \lambda} &= \frac{(-1.60)^2}{0.30 + 1.0} = \frac{2.56}{1.30} \approx 1.9692
+\end{align*}
+Compute the Split Gain:
+\begin{align*}
+    \Gain_A &= \frac{1}{2} \left[ 1.4000 + 1.9692 - 0.0235 \right] - \gamma \\
+    &= \frac{1}{2} [3.3457] - 0.50 = 1.6728 - 0.50 = \mathbf{+1.1728}
+\end{align*}
+Because $\Gain_A = +1.1728 > 0$, this split delivers substantial empirical loss reduction and is accepted.
+
+\paragraph{Step 3: Evaluate Split Candidate $B$ (Threshold $x_1 \le 1.8$):}
+Suppose a poor split isolates instance $\{1\}$ to Left and $\{2, 3, 4\}$ to Right:
+\begin{align*}
+    G_L &= 0.60, \quad &H_L &= 0.24 \implies \frac{G_L^2}{H_L + 1} = \frac{0.36}{1.24} \approx 0.2903 \\
+    G_R &= -0.80, \quad &H_R &= 0.46 \implies \frac{G_R^2}{H_R + 1} = \frac{0.64}{1.46} \approx 0.4384
+\end{align*}
+Compute the Split Gain:
+\begin{align*}
+    \Gain_B &= \frac{1}{2} \left[ 0.2903 + 0.4384 - 0.0235 \right] - 0.50 \\
+    &= \frac{1}{2} [0.7052] - 0.50 = 0.3526 - 0.50 = \mathbf{-0.1474}
+\end{align*}
+Because $\Gain_B = -0.1474 \le 0$, the model's structural regularization immediately \textbf{prunes and rejects} Candidate $B$, avoiding useless overfitting.
+
+% ==============================================================================
+\section{Loss Functions: Closed-Form Derivatives and Statistical Foundations}
+\label{sec:loss_functions}
+% ==============================================================================
+
+\subsection{The Architectural Decoupling of Loss from Topology}
+In modern gradient boosting engines (such as XGBoost, LightGBM, and our high-performance \texttt{hist-gbdt}), a foundational architectural principle is the \textbf{strict mathematical decoupling of the loss function from the tree-building engine}.
+
+Classical decision tree algorithms (such as standard CART, ID3, or C4.5) hard-code their splitting heuristics directly into the node evaluation logic (e.g., sample variance reduction for regression or Gini impurity for classification). Consequently, adapting classical trees to optimize specialized, non-standard objectives (such as asymmetric pinball loss for quantile regression, or Cox partial likelihood for survival analysis) historically required engineering entirely new splitting criteria from scratch.
+
+By contrast, under the 2nd-order Taylor optimization framework established in Section~\ref{sec:xgboost}, the entire tree-building subsystem---including histogram accumulation, candidate split scanning, and optimal leaf weight assignment---depends on the dataset \emph{exclusively} through two $N$-dimensional arrays computed prior to building each tree:
+\begin{equation}
+    \mathbf{g} = [g_1, g_2, \dots, g_N]^\top \in \R^N, \quad \mathbf{h} = [h_1, h_2, \dots, h_N]^\top \in \R^N
+\end{equation}
+The tree growth engine is completely agnostic to whether the underlying learning task is continuous regression, probabilistic binary classification, multi-class classification, or ranking. To support any new custom, differentiable loss function, an engineer needs only provide two scalar derivative functions:
+\begin{equation}
+    g(y, \hat{y}) = \frac{\partial l(y, \hat{y})}{\partial \hat{y}}, \quad h(y, \hat{y}) = \frac{\partial^2 l(y, \hat{y})}{\partial \hat{y}^2}
+\end{equation}
+subject only to the standard convexity condition $h(y, \hat{y}) \ge 0$. We now rigorously derive the closed-form derivatives and analyze the geometric and statistical implications for the two foundational supervised learning paradigms.
+
+\subsection{Squared Error Loss (Continuous Regression)}
+For continuous response variables $y_i \in \R$, the standard objective is the half-squared error loss:
+\begin{equation}
+    l(y_i, \hat{y}_i) = \frac{1}{2} (y_i - \hat{y}_i)^2
+\end{equation}
+The factor of $\frac{1}{2}$ is introduced for algebraic elegance, canceling with the exponent during differentiation.
+
+\paragraph{First-Order Derivative (Gradient):}
+Differentiating directly with respect to the prediction $\hat{y}_i$:
+\begin{equation}
+    g_i = \frac{\partial l(y_i, \hat{y}_i)}{\partial \hat{y}_i} = -(y_i - \hat{y}_i) = \hat{y}_i - y_i
+\end{equation}
+The gradient $g_i$ is simply the negative of the arithmetic residual $r_i = y_i - \hat{y}_i$. If the model underestimates the target ($\hat{y}_i < y_i$), $g_i < 0$, pulling the prediction upward; if the model overestimates ($\hat{y}_i > y_i$), $g_i > 0$, pulling the prediction downward.
+
+\paragraph{Second-Order Derivative (Hessian):}
+Differentiating the gradient with respect to $\hat{y}_i$:
+\begin{equation}
+    h_i = \frac{\partial^2 l(y_i, \hat{y}_i)}{\partial \hat{y}_i^2} = \frac{\partial (\hat{y}_i - y_i)}{\partial \hat{y}_i} = 1
+\end{equation}
+\textbf{The Constant Curvature Invariant:} Notice that $h_i \equiv 1$ identically for all instances $i \in \{1, \dots, N\}$, completely independent of both target $y_i$ and current prediction $\hat{y}_i$. Squared error loss possesses uniform, constant isotropic curvature across the entire prediction space.
+
+\paragraph{Leaf Weights and MAP Bayesian Interpretation:}
+Substituting $g_i = \hat{y}_i - y_i$ and $h_i = 1$ into the optimal leaf weight formula (Theorem 4):
+\begin{align}
+    H_j &= \sum_{i \in I_j} h_i = \sum_{i \in I_j} 1 = |I_j| \nonumber \\
+    G_j &= \sum_{i \in I_j} g_i = \sum_{i \in I_j} (\hat{y}_i - y_i) = -\sum_{i \in I_j} r_i
+\end{align}
+The optimal leaf output simplifies to:
+\begin{equation}
+    w_j^* = -\frac{G_j}{H_j + \lambda} = \frac{\sum_{i \in I_j} (y_i - \hat{y}_i)}{|I_j| + \lambda} = \frac{\sum_{i \in I_j} r_i}{|I_j| + \lambda} = \frac{|I_j|}{|I_j| + \lambda} \bar{r}_{I_j}
+\end{equation}
+where $\bar{r}_{I_j} = \frac{1}{|I_j|}\sum_{i \in I_j} r_i$ is the empirical mean residual in leaf $j$.
+
+\emph{Statistical Interpretation:}
+\begin{itemize}
+    \item When $\lambda = 0$ (unregularized), $w_j^* = \bar{r}_{I_j}$, exactly matching classical CART and Friedman's GBDT: the leaf output is purely the sample mean of the residuals.
+    \item When $\lambda > 0$, the leaf weight is scaled by the shrinkage factor $\frac{|I_j|}{|I_j| + \lambda} < 1$. This corresponds precisely to the \textbf{Maximum A Posteriori (MAP) Bayesian estimator} under a zero-mean Gaussian prior on leaf weights: $w_j \sim \mathcal{N}\left(0, \frac{\sigma^2}{\lambda}\right)$. In leaves with sparse data ($|I_j| \ll \lambda$), the output is heavily shrunken toward zero, protecting the ensemble from high-variance memorization.
+\end{itemize}
+
+\paragraph{Split Gain Under Squared Loss:}
+Substituting $H_L = |I_L|$ and $H_R = |I_R|$ into the split gain metric:
+\begin{equation}
+    \Gain_{\text{MSE}} = \frac{1}{2} \left[ \frac{\left(\sum_{i \in I_L} r_i\right)^2}{|I_L| + \lambda} + \frac{\left(\sum_{i \in I_R} r_i\right)^2}{|I_R| + \lambda} - \frac{\left(\sum_{i \in I_P} r_i\right)^2}{|I_P| + \lambda} \right] - \gamma
+\end{equation}
+When $\lambda = 0$ and $\gamma = 0$, this expression recovers exact variance reduction on residuals, linking the 2nd-order Taylor framework seamlessly back to the classical CART formulation in Section~\ref{sec:cart_loss}.
+
+\subsection{Binary Cross-Entropy / Log-Loss (Probabilistic Classification)}
+For binary classification tasks where $y_i \in \{0, 1\}$, let the ensemble output $\hat{y}_i = F(x_i) \in \R$ represent the raw unbounded margin (log-odds / logit). The predicted posterior probability $p_i = P(y_i = 1 \mid x_i)$ is parameterized via the logistic sigmoid link function:
+\begin{equation}
+    p_i = \sigma(\hat{y}_i) = \frac{1}{1 + e^{-\hat{y}_i}} = \frac{e^{\hat{y}_i}}{1 + e^{\hat{y}_i}}
+\end{equation}
+A useful derivative property of the logistic function is:
+\begin{equation}
+    \frac{d p_i}{d \hat{y}_i} = \frac{d}{d\hat{y}_i}(1 + e^{-\hat{y}_i})^{-1} = -(1 + e^{-\hat{y}_i})^{-2} (-e^{-\hat{y}_i}) = \frac{1}{1 + e^{-\hat{y}_i}} \cdot \frac{e^{-\hat{y}_i}}{1 + e^{-\hat{y}_i}} = p_i (1 - p_i)
+\end{equation}
+
+\paragraph{Negative Log-Likelihood Objective:}
+The negative log-likelihood of the Bernoulli distribution (binary cross-entropy loss) is:
+\begin{equation}
+    l(y_i, \hat{y}_i) = -y_i \ln p_i - (1 - y_i) \ln (1 - p_i)
+\end{equation}
+Expressing $l(y_i, \hat{y}_i)$ directly in terms of logit $\hat{y}_i$:
+\begin{align}
+    l(y_i, \hat{y}_i) &= -y_i \ln \left(\frac{1}{1 + e^{-\hat{y}_i}}\right) - (1 - y_i) \ln \left(\frac{e^{-\hat{y}_i}}{1 + e^{-\hat{y}_i}}\right) \nonumber \\
+    &= y_i \ln(1 + e^{-\hat{y}_i}) - (1 - y_i) \left[ -\hat{y}_i - \ln(1 + e^{-\hat{y}_i}) \right] \nonumber \\
+    &= (1 - y_i)\hat{y}_i + \ln(1 + e^{-\hat{y}_i}) = -y_i \hat{y}_i + \ln(1 + e^{\hat{y}_i})
+\end{align}
+
+\paragraph{First-Order Derivative (Gradient):}
+Applying the chain rule:
+\begin{align}
+    g_i = \frac{\partial l(y_i, \hat{y}_i)}{\partial \hat{y}_i} &= -\frac{y_i}{p_i} \frac{d p_i}{d \hat{y}_i} - \frac{1 - y_i}{1 - p_i} \left( -\frac{d p_i}{d \hat{y}_i} \right) \nonumber \\
+    &= -\frac{y_i}{p_i} p_i(1 - p_i) + \frac{1 - y_i}{1 - p_i} p_i(1 - p_i) \nonumber \\
+    &= -y_i(1 - p_i) + (1 - y_i)p_i = -y_i + y_i p_i + p_i - y_i p_i \nonumber \\
+    &= p_i - y_i
+\end{align}
+The gradient $g_i = p_i - y_i \in (-1, +1)$ represents the signed probability error:
+\begin{itemize}
+    \item If true label $y_i = 1$: $g_i = p_i - 1 \le 0$. The gradient is negative, driving the logit $\hat{y}_i$ upward ($w_j^* > 0$).
+    \item If true label $y_i = 0$: $g_i = p_i - 0 \ge 0$. The gradient is positive, driving the logit $\hat{y}_i$ downward ($w_j^* < 0$).
+\end{itemize}
+
+\paragraph{Second-Order Derivative (Hessian):}
+Differentiating $g_i$ with respect to $\hat{y}_i$:
+\begin{equation}
+    h_i = \frac{\partial g_i}{\partial \hat{y}_i} = \frac{\partial (p_i - y_i)}{\partial \hat{y}_i} = \frac{d p_i}{d \hat{y}_i} = p_i (1 - p_i)
+\end{equation}
+\textbf{The Variable Curvature Dynamic:} Unlike squared error where $h_i \equiv 1$, in logistic loss $h_i = p_i(1 - p_i)$ varies dynamically across instances:
+\begin{itemize}
+    \item $h_i \in (0, 0.25]$ for all predictions.
+    \item The maximum curvature occurs at the decision boundary where the model is maximally uncertain: $\hat{y}_i = 0 \implies p_i = 0.50 \implies h_i = 0.25$.
+    \item For highly confident predictions (e.g., $p_i = 0.999$ or $p_i = 0.001$), the curvature vanishes: $h_i \approx 0.001$.
+\end{itemize}
+
+\paragraph{Statistical Significance in Tree Building:}
+In the optimal leaf weight formula:
+\begin{equation}
+    w_j^* = -\frac{\sum_{i \in I_j} (p_i - y_i)}{\sum_{i \in I_j} p_i(1 - p_i) + \lambda}
+\end{equation}
+each sample is weighted by its curvature $p_i(1 - p_i)$. This curvature represents the \textbf{Fisher Information} of the Bernoulli distribution. Samples near the decision boundary ($p_i \approx 0.5$) carry maximum statistical information and dominate the Hessian sum $H_j$, whereas samples that are already comfortably classified provide near-zero information and are naturally attenuated.
+
+\paragraph{Numerical Stabilization: The Log-Sum-Exp Trick:}
+In low-level C++ implementations, computing $e^{\hat{y}_i}$ or $e^{-\hat{y}_i}$ directly can trigger severe IEEE 754 floating-point underflow or overflow when $|\hat{y}_i| > 700$. To ensure absolute numerical robustness, the probability and loss must be evaluated using stable logarithmic reformulations:
+\begin{equation}
+    p_i = \begin{cases}
+        \frac{1}{1 + e^{-\hat{y}_i}} & \text{if } \hat{y}_i \ge 0 \\
+        \frac{e^{\hat{y}_i}}{1 + e^{\hat{y}_i}} & \text{if } \hat{y}_i < 0
+    \end{cases}
+\end{equation}
+\begin{equation}
+    l(y_i, \hat{y}_i) = \max(\hat{y}_i, 0) - y_i \hat{y}_i + \ln\left(1 + e^{-|\hat{y}_i|}\right)
+\end{equation}
+This formulation guarantees that exponentiation arguments are strictly non-positive, eliminating any risk of overflow.
+
+\subsection{Design Extensibility: Supporting Arbitrary User-Defined Losses}
+The mathematical elegance of the 2nd-order formulation allows \texttt{hist-gbdt} to seamlessly accommodate other advanced loss functions without altering a single line of tree-building or parallelization logic:
+\begin{enumerate}
+    \item \textbf{Huber Loss (Robust Regression against Outliers):}
+    \begin{equation}
+        l_\delta(y, \hat{y}) = \begin{cases}
+            \frac{1}{2}(y - \hat{y})^2 & \text{for } |y - \hat{y}| \le \delta \\
+            \delta |y - \hat{y}| - \frac{1}{2}\delta^2 & \text{for } |y - \hat{y}| > \delta
+        \end{cases}
+    \end{equation}
+    For $|y - \hat{y}| > \delta$, the Hessian vanishes ($h = 0$). Adding $L_2$ regularization $\lambda > 0$ guarantees that the denominator $H_j + \lambda$ remains strictly positive and invertible.
+    \item \textbf{Poisson Regression (Count Data / Rate Modeling):}
+    For non-negative count labels $y_i \in \{0, 1, 2, \dots\}$ with log-link $\lambda_i = e^{\hat{y}_i}$:
+    \begin{equation}
+        l(y_i, \hat{y}_i) = e^{\hat{y}_i} - y_i \hat{y}_i \implies g_i = e^{\hat{y}_i} - y_i, \quad h_i = e^{\hat{y}_i} > 0
+    \end{equation}
+\end{enumerate}
+
+% ==============================================================================
+\section{The Computational Crisis and Histogram-Based Binning}
+\label{sec:histogram_binning}
+% ==============================================================================
+
+\subsection{The Algorithmic and Hardware Crisis of Exact Greedy Splitting}
+While the mathematical formulation of XGBoost solves the optimization dilemmas of GBDT, implementing it naively on real-world datasets reveals a catastrophic computational bottleneck.
+
+\paragraph{Algorithmic Complexity Bottleneck:}
+In the classical \textbf{Exact Greedy} algorithm, finding the optimal split at any tree node requires sorting the continuous feature values across all instances residing in that node. For a dataset with $N$ samples and $K$ features:
+\begin{itemize}
+    \item At a node with $n_m$ samples, sorting one feature costs $\mathcal{O}(n_m \log n_m)$, and sorting all $K$ features costs $\mathcal{O}(K \cdot n_m \log n_m)$.
+    \item Summed over all nodes at one tree level, the worst-case cost is $\mathcal{O}(K \cdot N \log N)$. Repeating this across $D$ levels yields:
+    \begin{equation}
+        \text{Time Complexity}_{\text{Exact}} = \mathcal{O}(D \cdot K \cdot N \log N).
+    \end{equation}
+\end{itemize}
+On tabular datasets with $N = 10^7$ rows and $K = 100$ features, sorting floating-point arrays billions of times completely overwhelms CPU computational budgets.
+
+\paragraph{The Hardware Memory Wall (Cache Miss Penalty):}
+Even more crippling than time complexity is the hardware-level pathology of Exact Greedy splitting: \textbf{the Von Neumann memory wall}.
+
+When continuous features are sorted, the natural row order of the samples is scrambled into a feature-specific permutation $\pi_k$. To accumulate the cumulative gradients $G_L = \sum g_{\pi(i)}$ and Hessians $H_L = \sum h_{\pi(i)}$, the CPU must access the gradient vectors in the scrambled order of the sorted indices $\pi_k(i)$. This produces non-contiguous, \textbf{random memory access patterns} across the entire heap:
+\begin{itemize}
+    \item L1 Data Cache latency: $\approx 1 \text{ ns}$ ($\sim 4$ clock cycles).
+    \item Main Memory (DRAM) latency: $\approx 50 - 80 \text{ ns}$ ($\sim 200 - 300$ clock cycles).
+\end{itemize}
+Every random pointer dereference into DRAM causes an L1/L2 cache miss. The CPU execution pipeline stalls, sitting idle for hundreds of cycles waiting for memory lines to arrive across the bus. Exact Greedy tree building is thoroughly \textbf{memory-bandwidth bound}, often leaving the arithmetic execution units largely idle while waiting on memory.
+
+\subsection{Histogram Quantization and the \texorpdfstring{\texttt{uint8}}{uint8} Representation}
+To break through both the algorithmic and memory bottlenecks, modern engines (pioneered by LightGBM (Ke et al., 2017) and adopted by XGBoost's histogram tree method (Chen \& Guestrin, 2016) and our \texttt{hist-gbdt}) employ \textbf{Quantile Histogram Binning}.
+
+\paragraph{Quantile Discretization Scheme:}
+Prior to boosting, each continuous feature $x_k \in \R$ is pre-binned into $B \le 256$ discrete bins using empirical quantiles:
+\begin{equation}
+    x_{ik} \in \R \longmapsto \text{bin}_{ik} \in \{0, 1, \dots, B - 1\}
+\end{equation}
+The bin boundaries $\{b_0, b_1, \dots, b_B\}$ are selected such that each bin contains an approximately equal number of training instances:
+\begin{equation}
+    P(b_{m-1} < X_k \le b_m) \approx \frac{1}{B}
+\end{equation}
+
+\paragraph{Why \texorpdfstring{$B \le 256$}{B <= 256}? The Byte-Alignment Triumph:}
+The choice of $B \le 256$ is not arbitrary; it represents a brilliant hardware-software co-design decision:
+\begin{itemize}
+    \item Because $2^8 = 256$, any bin index $b \in \{0, \dots, 255\}$ fits perfectly into a single unsigned 8-bit integer (\texttt{uint8\_t}).
+    \item A raw continuous dataset stored in double precision (\texttt{float64}) requires 8 bytes per cell. Discretizing into \texttt{uint8\_t} reduces the storage requirement to exactly 1 byte per cell.
+    \item \textbf{Feature-matrix compression: up to 87.5\% relative to a float64 input.} A 16 GB float64 feature matrix becomes a 2 GB \texttt{uint8} matrix, allowing the binned features to reside comfortably in RAM. This figure covers the feature matrix only: bin maps, gradients, Hessians, histograms, and the model add further overhead. Against XGBoost's own histogram representation the savings are smaller and must be measured.
+\end{itemize}
+
+\paragraph{Mathematical Justification: Why Binning Does Not Hurt Accuracy:}
+A common skepticism is that replacing continuous values with 256 discrete bins might cause unacceptable loss of precision. In reality, binning often \emph{improves} out-of-sample generalization:
+\begin{enumerate}
+    \item \textbf{Step-Function Invariance:} As proved in Section~\ref{sec:tabular_step}, decision trees are piecewise-constant step functions. They do not model continuous gradients; they identify partitions. If a split at $x = 18.23$ and a split at $x = 18.41$ place the exact same subset of training samples into the left child, they produce mathematically identical models.
+    \item \textbf{Implicit Regularization:} Quantization acts as an inductive bias that can reduce sensitivity to micro-fluctuations and numerical noise in the training data, smoothing decision boundaries.
+\end{enumerate}
+
+\subsection{Linear Histogram Construction and \texorpdfstring{$\mathcal{O}(B)$}{O(B)} Split Scanning}
+Once the dataset is quantized into \texttt{uint8\_t}, the search for candidate splits at each tree node undergoes an algorithmic transformation.
+
+\paragraph{Step 1: Linear-Time Histogram Aggregation:}
+Instead of sorting values, the algorithm allocates a small histogram buffer of $B$ bins for each feature. A single sequential linear pass over the samples in node $P$ aggregates the first and second derivatives:
+\begin{equation}
+    \text{For each } i \in I_P: \quad \begin{cases}
+        \text{bin} = X_{\text{binned}}[i, k] \\
+        \mathcal{H}_P[k][\text{bin}].G \mathrel{+}= g_i \\
+        \mathcal{H}_P[k][\text{bin}].H \mathrel{+}= h_i
+    \end{cases}
+\end{equation}
+For one feature, this accumulation runs in \textbf{linear time}: $\mathcal{O}(|I_P|)$, accessing memory in predictable, sequential bursts. Across all $K$ features, histogram construction costs $\mathcal{O}(K \cdot |I_P|)$.
+
+\paragraph{Step 2: Constant-Time \texorpdfstring{$\mathcal{O}(B)$}{O(B)} Split Scan:}
+Once the histogram $\mathcal{H}_P[k]$ is constructed, the node does not inspect samples anymore. To find the optimal split along feature $k$, it simply scans through the $B - 1$ discrete bin boundaries:
+\begin{enumerate}
+    \item Initialize running sums: $G_L = 0, H_L = 0$.
+    \item For bin index $b = 0, 1, \dots, B - 2$:
+    \begin{align}
+        G_L &\leftarrow G_L + \mathcal{H}_P[k][b].G \nonumber \\
+        H_L &\leftarrow H_L + \mathcal{H}_P[k][b].H \nonumber \\
+        G_R &= G_P - G_L \nonumber \\
+        H_R &= H_P - H_L \nonumber \\
+        \Gain(k, b) &= \frac{1}{2} \left[ \frac{G_L^2}{H_L + \lambda} + \frac{G_R^2}{H_R + \lambda} - \frac{G_P^2}{H_P + \lambda} \right] - \gamma
+    \end{align}
+    \item Select the tuple $(k^*, b^*)$ that maximizes $\Gain(k, b)$.
+\end{enumerate}
+Evaluating all candidate splits for a feature requires exactly $B - 1$ steps (e.g., 255 iterations). Thus, split scanning costs $\mathcal{O}(B)$ per feature and $\mathcal{O}(K \cdot B)$ per node, instead of $\mathcal{O}(K \cdot N \log N)$ for exact greedy sorting.
+
+\subsection{The Histogram Subtraction Trick: Mathematical Proof and 50\% Elimination}
+The ultimate algorithmic elegance of histogram-based trees is the \textbf{Histogram Subtraction Trick}.
+
+\paragraph{The Parent-Child Summation Invariant:}
+Consider a parent node $P$ partitioned into disjoint left and right child nodes: $I_P = I_L \cup I_R$ with $I_L \cap I_R = \emptyset$. Because summation is a linear operator:
+\begin{equation}
+    \sum_{i \in I_P} g_i = \sum_{i \in I_L} g_i + \sum_{i \in I_R} g_i, \quad \sum_{i \in I_P} h_i = \sum_{i \in I_L} h_i + \sum_{i \in I_R} h_i
+\end{equation}
+It follows that for every feature $k$ and every bin $b \in \{0, \dots, B-1\}$, the parent histogram is the exact element-wise vector sum of its children's histograms:
+\begin{equation}
+    \mathcal{H}_P[k][b] = \mathcal{H}_L[k][b] + \mathcal{H}_R[k][b]
+    \label{eq:hist_additivity}
+\end{equation}
+
+\paragraph{The Subtraction Algorithm:}
+Equation~\eqref{eq:hist_additivity} implies that we \textbf{never need to construct histograms for both children from the raw data}:
+\begin{enumerate}
+    \item Compare sample counts between the two children: $\min(|I_L|, |I_R|)$.
+    \item Explicitly construct the histogram \emph{only for the smaller child} (say, $L$) by iterating over its $|I_L|$ samples.
+    \item Compute the histogram for the larger sibling node ($R$) instantaneously via vector subtraction:
+    \begin{align}
+        \mathcal{H}_R[k][b].G &= \mathcal{H}_P[k][b].G - \mathcal{H}_L[k][b].G \nonumber \\
+        \mathcal{H}_R[k][b].H &= \mathcal{H}_P[k][b].H - \mathcal{H}_L[k][b].H
+    \end{align}
+\end{enumerate}
+
+\paragraph{Mathematical Proof of 50\% Pass Elimination:}
+\textbf{Theorem 5 (Histogram Subtraction Efficiency).} \emph{Across any binary tree, using the histogram subtraction trick eliminates at least 50\% of all sample traversals at every tree level below the root.}
+
+\emph{Proof.} Consider tree depth level $d \ge 1$. (The root histogram at $d = 0$ must be built once from all $N$ samples and is not eligible for subtraction.) Let the set of all nodes at level $d$ be partitioned into sibling pairs $(L_m, R_m)$ originating from parents $P_m$ at level $d-1$. The total number of samples across all nodes at level $d$ is $N$.
+
+Without subtraction, constructing histograms for all nodes at level $d$ requires scanning all $N$ samples: $\sum_m (|I_{L_m}| + |I_{R_m}|) = N$.
+
+With subtraction, for each sibling pair, we iterate only over $\min(|I_{L_m}|, |I_{R_m}|)$. Because $\min(a, b) \le \frac{a + b}{2}$ for any non-negative numbers $a, b \ge 0$:
+\begin{equation}
+    \sum_m \min(|I_{L_m}|, |I_{R_m}|) \le \sum_m \frac{|I_{L_m}| + |I_{R_m}|}{2} = \frac{N}{2}
+\end{equation}
+The subtraction step itself operates on $B$ bins and takes $\mathcal{O}(2^d \cdot K \cdot B)$ operations, which is completely independent of $N$. For industrial datasets where $N \gg 2^d B$, the cost of subtraction is negligible relative to histogram construction. Therefore, at every level below the root, \textbf{at least 50\% of all sample-level traversals are eliminated}. $\blacksquare$
+
+% ==============================================================================
+\section{Systems and Parallel Architecture (OpenMP)}
+\label{sec:systems_architecture}
+% ==============================================================================
+
+\subsection{Parallelization Taxonomy in Boosting Ensembles}
+When designing a parallel high-performance GBDT engine, architectural decisions must align with the underlying mathematical dependencies of the algorithm:
+\begin{itemize}
+    \item \textbf{Tree-Level Parallelism (Impossible in Boosting):} Unlike Random Forests where $B$ trees are statistically independent and can be trained concurrently across $B$ CPU cores (Section~\ref{sec:bagging_proof}), Boosting is fundamentally sequential:
+    \begin{equation}
+        F_t(x) = F_{t-1}(x) + \eta f_t(x)
+    \end{equation}
+    Tree $t$ cannot be formulated until tree $t-1$ has completed and updated the gradients $(g_i, h_i)$.
+    \item \textbf{Data Parallelism (Row-Partitioning):} Parallelizing sample iterations across cores requires each thread to maintain private histogram copies, followed by a cross-thread global reduction ($\sum \mathcal{H}_{\text{thread}}$) across all bins. For small node sizes, thread synchronization barriers incur prohibitive overhead.
+    \item \textbf{Feature Parallelism (Column-Partitioning):} Dividing the $K$ features among available CPU threads. Because the histogram for feature $k$ depends strictly on column $X[:, k]$, threads write to completely disjoint memory buffers. This is the gold standard for shared-memory multi-core architectures.
+\end{itemize}
+
+\subsection{Cache Hierarchy Optimization: The 4KB Histogram Footprint}
+To maximize hardware memory bandwidth, the memory layout of histogram bins must be optimized for CPU cache lines.
+
+\paragraph{Memory Alignment of Bins:}
+We define a contiguous C++ structure representing a single histogram bin:
+\begin{verbatim}
+struct HistBin {
+    double G;  // 8 bytes (double precision gradient sum)
+    double H;  // 8 bytes (double precision hessian sum)
+};
+\end{verbatim}
+Each \texttt{HistBin} is exactly $8 + 8 = 16$ bytes. A standard modern x86-64 CPU cache line is 64 bytes. Thus, when the buffer is 64-byte aligned, exactly 4 consecutive bins pack into a single cache line with no internal padding.
+
+\paragraph{The 4KB L1 Cache Miracle:}
+For a feature discretized into $B = 256$ bins, the entire histogram buffer consumes:
+\begin{equation}
+    \text{Size}(\mathcal{H}_k) = 256 \text{ bins} \times 16 \text{ bytes/bin} = 4{,}096 \text{ bytes} = 4 \text{ KB}
+\end{equation}
+Modern high-performance CPUs (e.g., Intel Alder Lake/Raptor Lake, AMD Zen 4/5) feature $32 \text{ KB}$ to $48 \text{ KB}$ of L1 Data Cache per physical core.
+
+\textbf{Engineering Significance:} For a single active feature per core, the 4 KB histogram fits comfortably within the CPU's dedicated L1 Data Cache. During the sequential pass over $N_{\text{node}}$ samples, bin accumulations $\mathcal{H}_k[b].G \mathrel{+}= g_i$ are served from L1 at a latency of $\approx 1 \text{ ns}$ per operation. With many threads, however, the aggregate working set (4 KB per active feature plus $g$, $h$, and row indices) can exceed L1, so some L2/L3 traffic is still possible; the layout reduces, but does not eliminate, lower-level cache pressure.
+
+\subsection{Memory Layout: Column-Major Layout for Contiguous Prefetching}
+The physical storage layout of the binned matrix $X_{\text{binned}} \in \{0, \dots, 255\}^{N \times K}$ determines memory bus saturation:
+\begin{itemize}
+    \item \textbf{Row-Major Layout (C-Order):} Consecutive memory addresses correspond to different features of the same sample: $[x_{i, 0}, x_{i, 1}, \dots, x_{i, K-1}]$. If thread $k$ iterates through sample indices $i \in I_{\text{node}}$ for feature $k$, it must jump $K$ bytes forward on every iteration, causing non-contiguous strided memory access and thrashing CPU hardware prefetchers.
+    \item \textbf{Column-Major Layout (Fortran-Order):} Consecutive memory addresses correspond to the same feature across consecutive samples: $[x_{0, k}, x_{1, k}, \dots, x_{N-1, k}]$.
+\end{itemize}
+In \texttt{hist-gbdt}, storing $X_{\text{binned}}$ in column-major order enables CPU hardware prefetchers to anticipate memory demands, streaming cache lines sequentially from DRAM at peak bus throughput ($\sim 50 - 100 \text{ GB/s}$).
+
+\subsection{Lock-Free OpenMP Multi-Threading Blueprint}
+Because feature buffers are independent, histogram building achieves \textbf{embarrassingly parallel execution without mutexes, spinlocks, or atomic operations}:
+
+\begin{verbatim}
+// Lock-free feature-parallel histogram construction
+#pragma omp parallel for schedule(static)
+for (int k = 0; k < num_features; ++k) {
+    HistBin* hist_k = &hist_buffer[k * 256];
+    std::memset(hist_k, 0, 256 * sizeof(HistBin));
+    
+    const uint8_t* feature_col = &X_binned[k * num_samples];
+    for (int idx = 0; idx < node_sample_count; ++idx) {
+        int i = node_indices[idx];
+        uint8_t bin = feature_col[i];
+        hist_k[bin].G += g[i];
+        hist_k[bin].H += h[i];
+    }
+}
+\end{verbatim}
+
+\paragraph{Algorithmic Invariants of the Blueprint:}
+\begin{enumerate}
+    \item \textbf{Static Scheduling:} In a given node, every feature scans the same node sample set, so the outer loop trip counts differ only by the static distribution of features across threads. \texttt{schedule(static)} minimizes OpenMP thread dispatch overhead.
+    \item \textbf{Zero Synchronization Barriers:} Each thread writes exclusively to its private memory slice \texttt{hist\_buffer[k * 256]}, avoiding false sharing across cache lines.
+    \item \textbf{L1-Resident Scan:} Once histograms are accumulated, scanning the 255 candidate thresholds for feature $k$ reads a 4 KB L1-resident buffer rather than revisiting training rows.
+\end{enumerate}
+
+% ==============================================================================
+\section{References}
+% ==============================================================================
+
+\begin{enumerate}
+    \item Breiman, L., Friedman, J. H., Olshen, R. A., \& Stone, C. J. (1984). \emph{Classification and Regression Trees}. Wadsworth.
+    \item Breiman, L. (1996). Bagging predictors. \emph{Machine Learning}, 24(2), 123--140.
+    \item Breiman, L. (2001). Random forests. \emph{Machine Learning}, 45(1), 5--32.
+    \item Chen, T., \& Guestrin, C. (2016). XGBoost: A scalable tree boosting system. \emph{ACM SIGKDD}, 785--794.
+    \item Condorcet, M. de (1785). \emph{Essai sur l'application de l'analyse \`a la probabilit\'e des d\'ecisions rendues \`a la pluralit\'e des voix}. Paris.
+    \item Freund, Y., \& Schapire, R. E. (1997). A decision-theoretic generalization of on-line learning and an application to boosting. \emph{Journal of Computer and System Sciences}, 55(1), 119--139.
+    \item Friedman, J. H. (2001). Greedy function approximation: a gradient boosting machine. \emph{Annals of Statistics}, 1189--1232.
+    \item Hoeffding, W. (1963). Probability inequalities for sums of bounded random variables. \emph{Journal of the American Statistical Association}, 58(301), 13--30.
+    \item Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q., \& Liu, T. Y. (2017). LightGBM: A highly efficient gradient boosting decision tree. \emph{NeurIPS}, 3146--3154.
+    \item Schapire, R. E. (1990). The strength of weak learnability. \emph{Machine Learning}, 5(2), 197--227.
+    \item Valiant, L. G. (1984). A theory of the learnable. \emph{Communications of the ACM}, 27(11), 1134--1142.
+\end{enumerate}
+
+\end{document}
