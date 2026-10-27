@@ -110,11 +110,11 @@ We begin by examining the unique statistical topology of tabular data, contrasti
 
 We then demonstrate why Bagging fundamentally fails to reduce irreducible bias, prompting the shift to Boosting: sequential error correction via functional gradient descent. Tracing the trajectory from AdaBoost's vulnerable exponential loss to Jerome Friedman's 1st-order GBDT, we pinpoint the limitations of gradient-only descent on tree structures. This sets the stage for the 2nd-order Taylor optimization framework introduced by XGBoost (Chen \& Guestrin, 2016). We provide rigorous derivations of optimal leaf weights ($w_j^* = -\frac{G_j}{H_j + \lambda}$) and closed-form split gain criteria under analytical $L_2$ leaf regularization and complexity pruning. 
 
-Finally, we transition from mathematics to high-performance computer systems. We analyze the computational crisis of exact greedy split-finding ($\mathcal{O}(K \cdot N \log N)$, memory explosion, and CPU cache misses), and formulate the solution: histogram-based continuous feature binning ($\le 256$ bins, \texttt{uint8} memory layout, up to 87.5\% reduction in raw feature-matrix storage). We derive the \emph{Histogram Subtraction Trick}, which eliminates at least half of the sample traversals at every level below the root, and present a lock-free multi-threaded OpenMP parallel architecture designed for modern multi-core processors.
+Finally, we transition from mathematics to high-performance computer systems. We analyze the computational crisis of exact greedy split-finding ($\mathcal{O}(K \cdot N \log N)$, memory explosion, and CPU cache misses), and formulate the solution: histogram-based continuous feature binning ($\le 256$ bins, \texttt{uint8} memory layout, up to 87.5\% reduction in raw feature-matrix storage). We derive the \emph{Histogram Subtraction Trick}, which eliminates at least half of the sample traversals at every level below the root, and present a lock-free multi-threaded OpenMP parallel architecture designed for modern multi-core processors. We close with the two practical extensions used by the accompanying implementation: dedicated missing-value bins with a learned default direction, and diagonally approximated multiclass softmax boosting with one tree per class per round.
 \end{abstract}
 
 \vspace{0.8em}
-\noindent\textbf{Notation.} Dataset $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^N$ with $x_i \in \R^K$ and target $y_i \in \R$ (or $\{0, 1\}$). Sample count $N$, feature count $K$. Tree ensemble prediction $\hat{y}_i^{(t)} = \sum_{m=1}^t \eta f_m(x_i)$ with learning rate $\eta \in (0, 1]$. First-order gradient $g_i = \partial l(y_i, \hat{y}) / \partial \hat{y}$, second-order Hessian $h_i = \partial^2 l(y_i, \hat{y}) / \partial \hat{y}^2$. Leaf index mapping $q: \R^K \to \{1, \dots, T\}$. Leaf sample set $I_j = \{i \mid q(x_i) = j\}$. Cumulative gradients $G_j = \sum_{i \in I_j} g_i$, $H_j = \sum_{i \in I_j} h_i$. Quantization bin index $b \in \{0, \dots, B-1\}$ with $B \le 256$.
+\noindent\textbf{Notation.} Dataset $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^N$ with $x_i \in \R^K$ and target $y_i \in \R$ (or class labels $\{0, 1\}$ / $\{0, \dots, K-1\}$). Sample count $N$, feature count $K$. Tree ensemble prediction $\hat{y}_i^{(t)} = \sum_{m=1}^t \eta f_m(x_i)$ with learning rate $\eta \in (0, 1]$. First-order gradient $g_i = \partial l(y_i, \hat{y}) / \partial \hat{y}$, second-order Hessian $h_i = \partial^2 l(y_i, \hat{y}) / \partial \hat{y}^2$. Leaf index mapping $q: \R^K \to \{1, \dots, T\}$. Leaf sample set $I_j = \{i \mid q(x_i) = j\}$. Cumulative gradients $G_j = \sum_{i \in I_j} g_i$, $H_j = \sum_{i \in I_j} h_i$. Quantization bin index $b \in \{0, \dots, B-1\}$ with $B \le 256$.
 
 \newpage
 \tableofcontents
@@ -1515,7 +1515,7 @@ The tree growth engine is completely agnostic to whether the underlying learning
 \begin{equation}
     g(y, \hat{y}) = \frac{\partial l(y, \hat{y})}{\partial \hat{y}}, \quad h(y, \hat{y}) = \frac{\partial^2 l(y, \hat{y})}{\partial \hat{y}^2}
 \end{equation}
-subject only to the standard convexity condition $h(y, \hat{y}) \ge 0$. We now rigorously derive the closed-form derivatives and analyze the geometric and statistical implications for the two foundational supervised learning paradigms.
+subject only to the standard convexity condition $h(y, \hat{y}) \ge 0$. We now rigorously derive the closed-form derivatives and analyze the geometric and statistical implications for the core supervised learning paradigms: regression, binary classification, and multiclass classification.
 
 \subsection{Squared Error Loss (Continuous Regression)}
 For continuous response variables $y_i \in \R$, the standard objective is the half-squared error loss:
@@ -1631,6 +1631,30 @@ In low-level C++ implementations, computing $e^{\hat{y}_i}$ or $e^{-\hat{y}_i}$ 
 \end{equation}
 This formulation guarantees that exponentiation arguments are strictly non-positive, eliminating any risk of overflow.
 
+\subsection{Multiclass Softmax Loss}
+\label{sec:multiclass_softmax}
+For $K > 2$ mutually exclusive classes, the model maintains one additive score per class, $F_k(x)$, and converts the vector of scores into a probability distribution with the softmax link:
+\begin{equation}
+    p_{ik} = \frac{\exp(F_k(x_i))}{\sum_{l=1}^{K} \exp(F_l(x_i))}.
+\end{equation}
+Let $r_{ik} = \mathbf{1}[y_i = k]$ be the one-hot target. The multiclass cross-entropy loss is
+\begin{equation}
+    l_i = -\sum_{k=1}^{K} r_{ik} \ln p_{ik}.
+\end{equation}
+Differentiating with respect to the score of class $k$ gives the probability residual
+\begin{equation}
+    g_{ik} = \frac{\partial l_i}{\partial F_k(x_i)} = p_{ik} - r_{ik}.
+\end{equation}
+The exact Hessian couples all classes through the off-diagonal terms
+\begin{equation}
+    \frac{\partial^2 l_i}{\partial F_k \partial F_l} =
+    \begin{cases}
+        p_{ik}(1-p_{ik}) & k = l, \\
+        -p_{ik}p_{il} & k \ne l.
+    \end{cases}
+\end{equation}
+Like most practical GBDT engines, \texttt{hist-gbdt} uses the diagonal approximation $h_{ik} = p_{ik}(1-p_{ik})$ and grows one regression tree per class per boosting round. This keeps the tree builder unchanged and reduces each multiclass update to $K$ independent binary-like Newton problems. The base score is the log class prior, $F_k^{(0)} = \ln\!\big((n_k+\epsilon)/(N+K\epsilon)\big)$, and predictions use a max-shifted softmax for numerical stability.
+
 \subsection{Design Extensibility: Supporting Arbitrary User-Defined Losses}
 The mathematical elegance of the 2nd-order formulation allows \texttt{hist-gbdt} to seamlessly accommodate other advanced loss functions without altering a single line of tree-building or parallelization logic:
 \begin{enumerate}
@@ -1735,6 +1759,15 @@ Once the histogram $\mathcal{H}_P[k]$ is constructed, the node does not inspect 
     \item Select the tuple $(k^*, b^*)$ that maximizes $\Gain(k, b)$.
 \end{enumerate}
 Evaluating all candidate splits for a feature requires exactly $B - 1$ steps (e.g., 255 iterations). Thus, split scanning costs $\mathcal{O}(B)$ per feature and $\mathcal{O}(K \cdot B)$ per node, instead of $\mathcal{O}(K \cdot N \log N)$ for exact greedy sorting.
+
+\subsection{Missing Values: Dedicated Bin and Learned Default Direction}
+\label{sec:missing_values}
+Real tabular data frequently contains absent measurements. Rather than imputing them before binning, \texttt{hist-gbdt} reserves one bin per feature for missing values. If a feature has $B_{\text{nm}}$ non-missing bins, its total width is $B = B_{\text{nm}} + 1$, and the missing bin is $b_{\text{miss}} = B_{\text{nm}}$. A candidate threshold $s$ partitions only the non-missing bins; samples in $b_{\text{miss}}$ can be sent to either child. Let $(G_M, H_M, N_M)$ be the missing-bin statistics and let $(G_L, H_L, N_L)$ and $(G_R, H_R, N_R)$ be the non-missing left/right statistics at threshold $s$. The engine evaluates both routings:
+\begin{align}
+    \Gain_{\text{miss}\to R} &= \frac{1}{2}\left[\frac{G_L^2}{H_L+\lambda} + \frac{(G_R+G_M)^2}{H_R+H_M+\lambda} - \frac{G_P^2}{H_P+\lambda}\right] - \gamma, \\
+    \Gain_{\text{miss}\to L} &= \frac{1}{2}\left[\frac{(G_L+G_M)^2}{H_L+H_M+\lambda} + \frac{G_R^2}{H_R+\lambda} - \frac{G_P^2}{H_P+\lambda}\right] - \gamma.
+\end{align}
+The larger finite gain is retained together with a boolean \texttt{default\_left}; prediction sends a missing value to that child, while non-missing values use the usual $\text{bin} \le s$ test. Ties are resolved deterministically (right routing, then the lowest threshold), which is essential for NumPy/C++ parity. The missing bin participates in histogram construction and subtraction exactly like every other bin, so the $\mathcal{O}(B)$ scan and the subtraction invariant remain unchanged.
 
 \subsection{The Histogram Subtraction Trick: Mathematical Proof and 50\% Elimination}
 The ultimate algorithmic elegance of histogram-based trees is the \textbf{Histogram Subtraction Trick}.
@@ -1848,6 +1881,9 @@ for (int k = 0; k < num_features; ++k) {
     \item \textbf{Zero Synchronization Barriers:} Each thread writes exclusively to its private memory slice \texttt{hist\_buffer[k * 256]}, avoiding false sharing across cache lines.
     \item \textbf{L1-Resident Scan:} Once histograms are accumulated, scanning the 255 candidate thresholds for feature $k$ reads a 4 KB L1-resident buffer rather than revisiting training rows.
 \end{enumerate}
+
+\subsection{Full C++ Tree Builder and Deterministic Parallelism}
+The production C++ backend does not stop at split search: it grows the complete level-wise tree. A breadth-first node queue stores each node's row indices, gradient/Hessian sums, and histogram. At every split, the smaller child's histogram is built from its rows and the larger child is obtained by subtraction; missing-bin statistics are copied through the same operation. Feature histograms are filled in parallel, while the per-node reduction over features is serial, so results do not depend on thread scheduling. A $10^{-12}$ relative gain tolerance and a canonical tie-break rule make the C++ and NumPy reference implementations agree on near-ties. The Python NumPy tree builder deliberately rebuilds each node histogram, serving as an independent correctness oracle for the optimized backend.
 
 % ==============================================================================
 \section{References}

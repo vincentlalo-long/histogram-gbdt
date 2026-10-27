@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61", "wheel", "pybind11>=2.11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gbdt"
+version = "0.1.0"
+description = "High-performance Histogram GBDT engine from scratch (learning project)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.23"]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "scikit-learn>=1.2", "xgboost>=1.7"]
+bench = ["scikit-learn>=1.2", "xgboost>=1.7", "lightgbm>=4.0", "matplotlib>=3.8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

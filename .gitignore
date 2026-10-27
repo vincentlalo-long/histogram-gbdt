@@ -31,12 +31,21 @@ htmlcov/
 .ruff_cache/
 
 # Benchmark artifacts & plots
-bench/results/
+bench/results/*
+!bench/results/real_comparison.json
+!bench/results/real_comparison.csv
+!bench/results/real_runs.csv
+!bench/results/real_summary.md
+!bench/results/memory_real.csv
+!bench/results/memory_runs.csv
+!bench/results/memory_summary.md
+data/
 
 # Documentation: keep the compiled PDF and its LaTeX source
 docs/*
 !docs/*.pdf
 !docs/*.tex
+!docs/benchmark.md
 !docs/figures/
 
 # LaTeX auxiliary files
